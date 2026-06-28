@@ -80,8 +80,8 @@ int main() {
     // UTF-8.
     {
         Screen s(20, 5);
-        s.feed("\xC3\xA1"); // 'á'
-        CHECK(s.at(0, 0).ch == U'á', "utf-8 á");
+        s.feed("\xC3\xA1");                            // 'á' em UTF-8
+        CHECK(s.at(0, 0).ch == 0xE1, "utf-8 a"); // U+00E1 (á), codepoint numérico
     }
 
     // Scroll: 2 linhas, 3 linhas de texto -> a primeira sobe.
