@@ -71,6 +71,10 @@ cmake --build build
 - **Módulo QML pertence ao executável, não a lib estática** — recursos QML (qmlcache) são descartados no link de `static lib` → runtime falha com *"Module Dante contains no type named Main"*. Solução: `qt_add_qml_module` fica no alvo do **executável** (`DanteCLI`); os controllers C++ ficam em `ui/` e entram por **context property** (`App`), sem precisar ser tipos QML.
 - **Nome do executável ≠ URI do módulo QML (FS case-insensitive)** — o URI `Dante` cria a pasta `build/app/Dante/`; em macOS/Windows (case-insensitive) ela colide com um exe chamado `dante` → linker falha com **EISDIR**. Por isso o exe é **`DanteCLI`** e o nome `dante` fica para o CLI helper.
 
+## Build / distribuição
+- CI Windows empacota (Release): `windeployqt` + `DanteCLI-portatil.zip` + instalador Inno (`installer/dante.iss`), publicados como artefato `DanteCLI-windows`. Baixar com `gh run download <id> -n DanteCLI-windows`.
+
 ## Backlog aberto
-- **F2: UI de terminal** — parser ANSI + render QML + input (próxima fase).
+- **Preview de terminal ligado (atual):** `TerminalController` (ui) ↔ ConPTY via `makePtyBackend()`; QML em **modo linha** (TextField + Enter) com **strip de ANSI simples**. NÃO é terminal real ainda.
+- **F2 real:** parser VT + grid 2D + render (QPainter/QRhi) + input char-a-char + cores. Substitui o strip/modo-linha do preview.
 - ConPTY: drenar trailing-output antes do `ClosePseudoConsole` (hoje há janela mínima de corte); migrar a fila p/ SPSC lock-free se profiling pedir.

@@ -32,3 +32,32 @@ jobs:
 
       - name: Test (ctest — spawna cmd.exe via ConPTY de verdade)
         run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
+
+      - name: Empacotar (Release — windeployqt + zip portátil)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        run: |
+          $deploy = "deploy/DanteCLI"
+          New-Item -ItemType Directory -Force -Path $deploy | Out-Null
+          Copy-Item build/app/Release/DanteCLI.exe $deploy/
+          & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --qmldir app/qml "$deploy/DanteCLI.exe"
+          Compress-Archive -Path "$deploy/*" -DestinationPath "DanteCLI-portatil.zip" -Force
+          Write-Host "Conteúdo do pacote:"; Get-ChildItem $deploy -Name
+
+      - name: Instalador (Inno Setup — best-effort)
+        if: matrix.config == 'Release'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/dante.iss
+
+      - name: Upload artefatos Windows
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DanteCLI-windows
+          path: |
+            DanteCLI-portatil.zip
+            installer/Output/*.exe
+          if-no-files-found: warn

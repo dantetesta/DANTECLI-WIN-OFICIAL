@@ -1,5 +1,6 @@
 add_library(dante_platform STATIC
     src/pty/ConPtyBackend.cpp
+    src/PtyFactory.cpp
     src/memstat/MemStat.cpp
     src/secrets/DpapiSecrets.cpp
 )

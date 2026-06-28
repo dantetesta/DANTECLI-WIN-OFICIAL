@@ -1,6 +1,8 @@
 qt_add_library(dante_ui STATIC
     src/AppController.cpp
     include/dante/ui/AppController.hpp
+    src/TerminalController.cpp
+    include/dante/ui/TerminalController.hpp
 )
 add_library(dante::ui ALIAS dante_ui)
 
