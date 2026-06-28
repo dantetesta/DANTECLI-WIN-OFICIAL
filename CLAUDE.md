@@ -44,7 +44,7 @@ cmake --build build
 
 ## Roadmap (F0..F9, resumido)
 - **F0** — scaffolding que compila **e roda** (verificado no mac: build verde, teste do core passa, janela QML abre viva). Interfaces puras + stubs.
-- **F1** — ConPTY real: `CreatePseudoConsole` + `CreateProcessW` suspenso no Job Object `KILL_ON_JOB_CLOSE` + reader/waiter `jthread`. RAII em todo `HANDLE`/`HPCON`. Validado por comportamento no **CI Windows** (`ctest` spawna `cmd.exe` de verdade: echo/write/resize/close). *(atual)*
+- **F1** — ConPTY real: `CreatePseudoConsole` + `CreateProcessW` (sample canônico do MS) + Job Object `KILL_ON_JOB_CLOSE` + reader (`ReadFile` bloqueante) / waiter `jthread`. RAII em todo `HANDLE`/`HPCON`. CI Windows valida **plumbing** (spawn real, pipe de saída recebendo VT, write/resize/close, teardown limpo). **Conteúdo de tela / shell interativo = validar no Windows interativo** (runner headless do Actions não renderiza conteúdo — ver gotcha). *(atual)*
 - **F2** — UI de terminal (render + input) em QML.
 - **F3** — abas/painéis/multiplexação.
 - **F4** — persistência SQLite migração-safe (sessões, histórico).
@@ -66,7 +66,8 @@ cmake --build build
 - **IDs únicos** — toda sessão/nó/aba tem id único estável; não reusar ids.
 
 ### Gotchas de plataforma / build (descobertos na construção)
-- **ConPTY: o conhost segura o pipe de saída mesmo após o filho sair (F1)** — `ReadFile` bloqueante **não** retorna no fim do processo. Solução: uma thread *waiter* espera o processo sair (`WaitForSingleObject`) e só então chama `ClosePseudoConsole`, que destrava o *reader* (`ERROR_BROKEN_PIPE`). Fechar as pontas do filho (inputRead/outputWrite) logo após `CreatePseudoConsole`. Job Object `KILL_ON_JOB_CLOSE` mata a árvore no teardown.
+- **ConPTY: o conhost segura o pipe de saída mesmo após o filho sair (F1)** — `ReadFile` bloqueante **não** retorna no fim do processo. Solução: uma thread *waiter* espera o processo sair (`WaitForSingleObject`) + graça (~300ms p/ flush) e só então `ClosePseudoConsole`, que destrava o *reader* (`ERROR_BROKEN_PIPE`). Fechar as pontas do filho (inputRead/outputWrite) **depois** do `CreateProcess` (ordem do sample MS). Job Object `KILL_ON_JOB_CLOSE` mata a árvore no teardown.
+- **ConPTY no CI headless do GitHub Actions renderiza só FRAMING, não conteúdo (F1)** — numa sessão não-interativa, o conhost emite mode-set/clear/title mas **não** o texto de tela do shell, e shells interativos saem na hora (stdin EOF). Validado: o setup segue o sample canônico (testado: `PeekNamedPipe` cega pro streaming → usar `ReadFile` bloqueante; `CREATE_SUSPENDED`, ordem de handles e Job Object **não** eram a causa). **Não é bug do código** — é limitação do ambiente. O CI testa plumbing; o terminal real valida no Windows interativo.
 - **Módulo QML pertence ao executável, não a lib estática** — recursos QML (qmlcache) são descartados no link de `static lib` → runtime falha com *"Module Dante contains no type named Main"*. Solução: `qt_add_qml_module` fica no alvo do **executável** (`DanteCLI`); os controllers C++ ficam em `ui/` e entram por **context property** (`App`), sem precisar ser tipos QML.
 - **Nome do executável ≠ URI do módulo QML (FS case-insensitive)** — o URI `Dante` cria a pasta `build/app/Dante/`; em macOS/Windows (case-insensitive) ela colide com um exe chamado `dante` → linker falha com **EISDIR**. Por isso o exe é **`DanteCLI`** e o nome `dante` fica para o CLI helper.
 

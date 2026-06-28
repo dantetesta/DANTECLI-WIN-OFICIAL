@@ -1,6 +1,5 @@
 #include <dante/platform/pty/ConPtyBackend.hpp>
 
-#include <cstdio> // DIAG F1: instrumentacao temporaria do reader
 #include <string>
 #include <vector>
 
@@ -61,9 +60,13 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
         return fail("ConPTY: UpdateProcThreadAttribute falhou");
     }
 
-    // 5. DIAG F1: Job Object removido temporariamente (sample oficial nao usa) p/ checar
-    //    se ele interferia na sessao do pseudoconsole. Re-adicionar depois.
-    win::unique_handle job;
+    // 5. Job Object com KILL_ON_JOB_CLOSE: fechar o handle (close()) mata o filho + filhos.
+    win::unique_handle job(::CreateJobObjectW(nullptr, nullptr));
+    if (job.valid()) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli{};
+        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        ::SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+    }
 
     // 6. Cria o processo SUSPENSO, anexa ao job, depois resume — garante que o filho
     //    ja nasce dentro do job (sem janela de escape).
@@ -166,18 +169,14 @@ void ConPtyBackend::close() {
 }
 
 void ConPtyBackend::readerLoop() {
-    // ReadFile BLOQUEANTE (padrao p/ ConPTY). Streama o output conforme o conhost escreve.
-    // O EOF vem quando o waiter chama ClosePseudoConsole (conhost fecha a ponta de escrita).
+    // ReadFile BLOQUEANTE (padrao p/ ConPTY): streama o output conforme o conhost escreve.
+    // EOF quando o waiter chama ClosePseudoConsole (conhost fecha a ponta de escrita).
     char buffer[4096];
-    std::size_t diagTotal = 0; // DIAG F1
     for (;;) {
         DWORD n = 0;
         if (!::ReadFile(outputRead_.get(), buffer, sizeof(buffer), &n, nullptr) || n == 0) {
-            std::fprintf(stderr, "[reader] fim ReadFile gle=%lu total=%zu\n",
-                         ::GetLastError(), diagTotal); // DIAG F1
             break;
         }
-        diagTotal += n; // DIAG F1
         {
             std::scoped_lock lk(outMtx_);
             outQueue_.emplace(buffer, n);
@@ -195,10 +194,7 @@ void ConPtyBackend::waiterLoop() {
     // Espera o shell sair; da uma graca pro conhost flushar o frame final; entao fecha o
     // pseudoconsole (ClosePseudoConsole quebra o ReadFile bloqueante do reader -> EOF).
     ::WaitForSingleObject(process_.get(), INFINITE);
-    DWORD ec = 0;
-    ::GetExitCodeProcess(process_.get(), &ec);
-    ::Sleep(300); // graca pro flush final
-    std::fprintf(stderr, "[waiter] child ec=%lu (0x%lX), fechando pseudoconsole\n", ec, ec); // DIAG F1
+    ::Sleep(300);
     std::scoped_lock lk(pconMtx_);
     pseudoConsole_.reset(); // ClosePseudoConsole — unico ponto que fecha o HPCON em runtime
 }
