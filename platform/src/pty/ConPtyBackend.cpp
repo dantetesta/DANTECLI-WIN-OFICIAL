@@ -168,10 +168,32 @@ void ConPtyBackend::close() {
 void ConPtyBackend::readerLoop() {
     char buffer[4096];
     bool childExited = false;
-    int emptyStreak = 0;
-    // Fecha o pseudoconsole so quando o filho saiu E a pipe ficou estavelmente vazia
-    // (~6 x 5ms). Drenar ANTES de fechar evita o descarte de output pelo conhost.
-    constexpr int kEmptyToClose = 6;
+    int idlePolls = 0;
+    // O conhost renderiza/flusha a saida de forma ASSINCRONA — o output final do comando
+    // costuma chegar DEPOIS de o processo sinalizar saida. Por isso, apos o filho sair,
+    // damos uma janela de graca generosa de silencio antes de fechar (~400ms = 80 x 5ms);
+    // qualquer byte recebido reseta a contagem. So entao ClosePseudoConsole.
+    constexpr int kGracePolls = 80;
+
+    auto drainAvailable = [&] {
+        for (;;) {
+            DWORD avail = 0;
+            if (!::PeekNamedPipe(outputRead_.get(), nullptr, 0, nullptr, &avail, nullptr) || avail == 0) {
+                return;
+            }
+            const DWORD toRead = avail < sizeof(buffer) ? avail : static_cast<DWORD>(sizeof(buffer));
+            DWORD n = 0;
+            if (!::ReadFile(outputRead_.get(), buffer, toRead, &n, nullptr) || n == 0) {
+                return;
+            }
+            {
+                std::scoped_lock lk(outMtx_);
+                outQueue_.emplace(buffer, n);
+            }
+            outCv_.notify_one();
+            idlePolls = 0;
+        }
+    };
 
     for (;;) {
         if (closing_.load()) {
@@ -182,7 +204,6 @@ void ConPtyBackend::readerLoop() {
         if (!::PeekNamedPipe(outputRead_.get(), nullptr, 0, nullptr, &avail, nullptr)) {
             break; // pipe quebrada
         }
-
         if (avail > 0) {
             const DWORD toRead = avail < sizeof(buffer) ? avail : static_cast<DWORD>(sizeof(buffer));
             DWORD n = 0;
@@ -194,17 +215,20 @@ void ConPtyBackend::readerLoop() {
                 outQueue_.emplace(buffer, n);
             }
             outCv_.notify_one();
-            emptyStreak = 0;
-            continue; // segue drenando enquanto houver bytes (sem dormir)
+            idlePolls = 0;
+            continue; // drena enquanto houver bytes (sem dormir)
         }
 
         // avail == 0: nada pendente agora.
         if (!childExited && ::WaitForSingleObject(process_.get(), 0) == WAIT_OBJECT_0) {
             childExited = true;
         }
-        if (childExited && ++emptyStreak >= kEmptyToClose) {
-            std::scoped_lock lk(pconMtx_);
-            pseudoConsole_.reset(); // ClosePseudoConsole — unico ponto de fecho em runtime
+        if (childExited && ++idlePolls >= kGracePolls) {
+            {
+                std::scoped_lock lk(pconMtx_);
+                pseudoConsole_.reset(); // ClosePseudoConsole
+            }
+            drainAvailable(); // pega o que o conhost soltar ao fechar
             break;
         }
         ::Sleep(5);
