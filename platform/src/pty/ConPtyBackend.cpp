@@ -47,10 +47,6 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
     }
     win::unique_pseudoconsole pcon(hpc);
 
-    // 3. ConPTY ja duplicou as pontas do filho — fechamos as nossas copias.
-    inputRead.reset();
-    outputWrite.reset();
-
     // 4. Lista de atributos com o pseudoconsole.
     SIZE_T attrSize = 0;
     ::InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
@@ -101,6 +97,11 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
     }
     ::ResumeThread(pi.hThread);
     thread.reset();
+
+    // Fecha NOSSAS copias das pontas do filho SO depois do CreateProcess (ordem do sample
+    // oficial do MS). Fechar antes fazia o cmd ver stdin EOF e sair em ~15ms.
+    inputRead.reset();
+    outputWrite.reset();
 
     // 7. Publica os recursos e sobe as threads.
     pseudoConsole_ = std::move(pcon);
@@ -231,7 +232,9 @@ void ConPtyBackend::readerLoop() {
         // avail == 0: nada pendente agora.
         if (!childExited && ::WaitForSingleObject(process_.get(), 0) == WAIT_OBJECT_0) {
             childExited = true;
-            std::fprintf(stderr, "[reader] childExited detectado total=%zu iters=%d\n",
+            DWORD ec = 0;
+            ::GetExitCodeProcess(process_.get(), &ec);
+            std::fprintf(stderr, "[reader] childExited ec=%lu (0x%lX) total=%zu iters=%d\n", ec, ec,
                          diagTotal, diagIters); // DIAG F1
         }
         if (childExited && ++idlePolls >= kGracePolls) {
