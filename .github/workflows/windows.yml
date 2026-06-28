@@ -52,6 +52,15 @@ jobs:
           New-Item -ItemType Directory -Force -Path $deploy | Out-Null
           Copy-Item $exe.FullName "$deploy/"
           & "$env:QT_ROOT_DIR/bin/windeployqt.exe" --release --compiler-runtime --qmldir app/qml "$deploy/DanteCLI.exe"
+          # Bundla o runtime do MSVC. --compiler-runtime nem sempre acha (precisa do env do
+          # VS), então copiamos do System32 do runner. vcruntime140_1.dll em especial falta
+          # em muitas máquinas e é o clássico "o app nem abre".
+          $crt = "vcruntime140.dll","vcruntime140_1.dll","msvcp140.dll","msvcp140_1.dll","concrt140.dll"
+          foreach ($d in $crt) {
+            $src = Join-Path $env:SystemRoot "System32\$d"
+            if (Test-Path $src) { Copy-Item $src "$deploy/"; Write-Host "runtime: $d" }
+            else { Write-Host "runtime AUSENTE no runner: $d" }
+          }
           Compress-Archive -Path "$deploy/*" -DestinationPath "DanteCLI-portatil.zip" -Force
           Write-Host "Conteúdo do pacote:"; Get-ChildItem $deploy -Name
 
