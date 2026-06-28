@@ -3,18 +3,30 @@
 #include <dante/services/IPtyBackend.hpp>
 #include <dante/util/Result.hpp>
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #ifdef _WIN32
-#include <windows.h>
+#include <dante/platform/win/ScopedHandle.hpp>
 #endif
 
 namespace dante {
 
-// ponytail: F1 implementa ConPtyBackend de verdade (CreatePseudoConsole + pipes + processo).
-//           Na F0 isto e so o contrato; todos os metodos retornam Result de erro.
+// ConPTY (pseudoconsole) real. Sequencia canonica: CreatePipe x2 -> CreatePseudoConsole
+// -> CreateProcessW (suspenso) no Job Object KILL_ON_JOB_CLOSE -> ResumeThread.
+//
+// Concorrencia (gotcha do ConPTY): o conhost segura o pipe de saida MESMO depois do
+// processo filho sair, entao um ReadFile bloqueante so destrava apos ClosePseudoConsole.
+// Por isso ha duas threads:
+//   - reader: ReadFile bloqueante -> fila; encerra em ERROR_BROKEN_PIPE.
+//   - waiter: espera o filho sair -> ClosePseudoConsole (destrava o reader).
+// read() faz pull da fila (pull-based, conforme a interface do core).
 class ConPtyBackend final : public IPtyBackend {
 public:
     ConPtyBackend() = default;
@@ -31,11 +43,30 @@ public:
 
 private:
 #ifdef _WIN32
-    // F1 preenche e libera estes recursos.
-    HPCON  pseudoConsole_{nullptr};
-    HANDLE inputWrite_{nullptr};
-    HANDLE outputRead_{nullptr};
-    HANDLE process_{nullptr};
+    void readerLoop();
+    void waiterLoop();
+
+    // Fila de saida (reader -> read()). ponytail: mutex+condvar agora; trocar por
+    // SPSC lock-free se profiling mostrar contencao (PRD 4.3).
+    std::mutex outMtx_;
+    std::condition_variable outCv_;
+    std::queue<std::string> outQueue_;
+    bool finished_ = false;
+
+    std::atomic<bool> closing_{false};
+
+    std::mutex pconMtx_; // serializa ResizePseudoConsole vs ClosePseudoConsole
+
+    // Recursos declarados ANTES das threads: na destruicao, as threads (declaradas
+    // por ultimo) sao unidas primeiro, com os handles ainda vivos.
+    win::unique_handle inputWrite_;          // escrevemos input do usuario aqui
+    win::unique_handle outputRead_;          // lemos output do shell aqui
+    win::unique_pseudoconsole pseudoConsole_; // fechado pelo waiter no fim do filho
+    win::unique_handle process_;             // handle do shell (cmd/pwsh/...)
+    win::unique_handle job_;                 // KILL_ON_JOB_CLOSE: fecha -> mata o filho
+
+    std::jthread reader_;
+    std::jthread waiter_;
 #endif
 };
 
