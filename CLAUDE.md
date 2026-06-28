@@ -2,6 +2,7 @@
 
 **Versão:** 0.0.2 — fase **F1 (ConPTY)**.
 **Stack:** C++23 · Qt6 QML (Quick + QuickControls2) · 100% free/libre (libs LGPL/MIT/domínio público, Qt em **link dinâmico** LGPL) · **SEM WebView2/WebEngine**.
+**Alvo:** **Windows 10 (1809+ / build 17763) e Windows 11** · x64 + ARM64. ConPTY (`CreatePseudoConsole`) exige 1809+ — fixado em `_WIN32_WINNT=0x0A00`. DPAPI/Job Objects/PeekNamedPipe são todos Win10+.
 
 ## O que o app faz
 Multiplexador de terminal **nativo do Windows**: várias sessões de shell em abas/painéis, orquestração de agentes num **canvas**, segredos e histórico persistidos localmente. É a reconstrução do app macOS (Swift/SwiftUI) com **paridade conceitual** — mesma ideia de produto, implementação nativa Win32 + Qt.

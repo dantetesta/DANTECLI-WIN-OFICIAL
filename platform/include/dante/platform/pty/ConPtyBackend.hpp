@@ -21,12 +21,12 @@ namespace dante {
 // ConPTY (pseudoconsole) real. Sequencia canonica: CreatePipe x2 -> CreatePseudoConsole
 // -> CreateProcessW (suspenso) no Job Object KILL_ON_JOB_CLOSE -> ResumeThread.
 //
-// Concorrencia (gotcha do ConPTY): o conhost segura o pipe de saida MESMO depois do
-// processo filho sair, entao um ReadFile bloqueante so destrava apos ClosePseudoConsole.
-// Por isso ha duas threads:
-//   - reader: ReadFile bloqueante -> fila; encerra em ERROR_BROKEN_PIPE.
-//   - waiter: espera o filho sair -> ClosePseudoConsole (destrava o reader).
-// read() faz pull da fila (pull-based, conforme a interface do core).
+// Concorrencia (gotcha do ConPTY): ClosePseudoConsole DESCARTA a saida bufferizada ainda
+// nao lida. Com cmd curto (/c echo) o filho sai instantaneamente, entao fechar cedo perde
+// o output. Solucao: UMA thread reader que drena via PeekNamedPipe ate a pipe esvaziar (e
+// o filho ter saido) e SO ENTAO chama ClosePseudoConsole. read() faz pull da fila.
+// ponytail: poll de 5ms quando ocioso (~200 peeks/s/sessao). Trocar por overlapped I/O +
+//           WaitForMultipleObjects na F2 (render) p/ a meta de <1% CPU idle.
 class ConPtyBackend final : public IPtyBackend {
 public:
     ConPtyBackend() = default;
@@ -44,7 +44,6 @@ public:
 private:
 #ifdef _WIN32
     void readerLoop();
-    void waiterLoop();
 
     // Fila de saida (reader -> read()). ponytail: mutex+condvar agora; trocar por
     // SPSC lock-free se profiling mostrar contencao (PRD 4.3).
@@ -61,12 +60,11 @@ private:
     // por ultimo) sao unidas primeiro, com os handles ainda vivos.
     win::unique_handle inputWrite_;          // escrevemos input do usuario aqui
     win::unique_handle outputRead_;          // lemos output do shell aqui
-    win::unique_pseudoconsole pseudoConsole_; // fechado pelo waiter no fim do filho
+    win::unique_pseudoconsole pseudoConsole_; // fechado pelo reader ao drenar + sair
     win::unique_handle process_;             // handle do shell (cmd/pwsh/...)
     win::unique_handle job_;                 // KILL_ON_JOB_CLOSE: fecha -> mata o filho
 
     std::jthread reader_;
-    std::jthread waiter_;
 #endif
 };
 

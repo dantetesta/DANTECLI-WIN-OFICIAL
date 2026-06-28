@@ -111,7 +111,6 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
     closing_.store(false);
 
     reader_ = std::jthread([this] { readerLoop(); });
-    waiter_ = std::jthread([this] { waiterLoop(); });
     return {};
 }
 
@@ -161,38 +160,61 @@ void ConPtyBackend::close() {
         return; // teardown roda uma unica vez
     }
     // Fechar o handle do job dispara KILL_ON_JOB_CLOSE -> mata o filho (se ainda vivo).
-    // O waiter observa a saida do processo e chama ClosePseudoConsole, que destrava o
-    // reader (ERROR_BROKEN_PIPE). As jthreads sao unidas na destruicao do backend.
+    // O reader ve closing_, drena o que sobrou na pipe e entao chama ClosePseudoConsole.
+    // A jthread reader_ e unida na destruicao do backend.
     job_.reset();
 }
 
 void ConPtyBackend::readerLoop() {
     char buffer[4096];
+    bool childExited = false;
+    int emptyStreak = 0;
+    // Fecha o pseudoconsole so quando o filho saiu E a pipe ficou estavelmente vazia
+    // (~6 x 5ms). Drenar ANTES de fechar evita o descarte de output pelo conhost.
+    constexpr int kEmptyToClose = 6;
+
     for (;;) {
-        DWORD n = 0;
-        const BOOL ok = ::ReadFile(outputRead_.get(), buffer, sizeof(buffer), &n, nullptr);
-        if (!ok || n == 0) {
-            break; // ERROR_BROKEN_PIPE: pseudoconsole fechado / fim
+        if (closing_.load()) {
+            childExited = true; // close(): o job ja matou o filho; drena o que sobrou
         }
-        {
-            std::scoped_lock lk(outMtx_);
-            outQueue_.emplace(buffer, n);
+
+        DWORD avail = 0;
+        if (!::PeekNamedPipe(outputRead_.get(), nullptr, 0, nullptr, &avail, nullptr)) {
+            break; // pipe quebrada
         }
-        outCv_.notify_one();
+
+        if (avail > 0) {
+            const DWORD toRead = avail < sizeof(buffer) ? avail : static_cast<DWORD>(sizeof(buffer));
+            DWORD n = 0;
+            if (!::ReadFile(outputRead_.get(), buffer, toRead, &n, nullptr) || n == 0) {
+                break;
+            }
+            {
+                std::scoped_lock lk(outMtx_);
+                outQueue_.emplace(buffer, n);
+            }
+            outCv_.notify_one();
+            emptyStreak = 0;
+            continue; // segue drenando enquanto houver bytes (sem dormir)
+        }
+
+        // avail == 0: nada pendente agora.
+        if (!childExited && ::WaitForSingleObject(process_.get(), 0) == WAIT_OBJECT_0) {
+            childExited = true;
+        }
+        if (childExited && ++emptyStreak >= kEmptyToClose) {
+            std::scoped_lock lk(pconMtx_);
+            pseudoConsole_.reset(); // ClosePseudoConsole — unico ponto de fecho em runtime
+            break;
+        }
+        ::Sleep(5);
     }
+
     {
         std::scoped_lock lk(outMtx_);
         finished_ = true;
     }
     outCv_.notify_all();
-}
-
-void ConPtyBackend::waiterLoop() {
-    // Espera o shell sair; so entao fecha o pseudoconsole (drena o buffer antes do
-    // ClosePseudoConsole, que destrava o ReadFile do reader).
-    ::WaitForSingleObject(process_.get(), INFINITE);
-    std::scoped_lock lk(pconMtx_);
-    pseudoConsole_.reset(); // ClosePseudoConsole — unico ponto que fecha o HPCON em runtime
 }
 
 #else // ----- fora do Windows nao existe ConPTY -----
