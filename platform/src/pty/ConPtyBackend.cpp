@@ -79,10 +79,12 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
     std::vector<wchar_t> cmdLine(wcmd.begin(), wcmd.end());
     cmdLine.push_back(L'\0');
 
+    // SEM CREATE_SUSPENDED: o sample oficial do MS cria o processo normal. (Suspender +
+    // resumir parecia interferir na conexao do pseudoconsole — output nao era emitido.)
     PROCESS_INFORMATION pi{};
     const BOOL created = ::CreateProcessW(
         nullptr, cmdLine.data(), nullptr, nullptr, FALSE,
-        EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED, nullptr, nullptr, &si.StartupInfo, &pi);
+        EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &si.StartupInfo, &pi);
     ::DeleteProcThreadAttributeList(attrList);
     if (!created) {
         return fail("ConPTY: CreateProcessW falhou");
@@ -95,7 +97,6 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
     if (job.valid()) {
         ::AssignProcessToJobObject(job.get(), pi.hProcess);
     }
-    ::ResumeThread(pi.hThread);
     thread.reset();
 
     // Fecha NOSSAS copias das pontas do filho SO depois do CreateProcess (ordem do sample
