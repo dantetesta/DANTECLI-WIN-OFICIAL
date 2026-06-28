@@ -76,5 +76,6 @@ cmake --build build
 
 ## Backlog aberto
 - **Preview de terminal ligado (atual):** `TerminalController` (ui) ↔ ConPTY via `makePtyBackend()`; QML em **modo linha** (TextField + Enter) com **strip de ANSI simples**. NÃO é terminal real ainda.
-- **F2 real:** parser VT + grid 2D + render (QPainter/QRhi) + input char-a-char + cores. Substitui o strip/modo-linha do preview.
+- **F2 — parser VT (FEITO, verificado):** `core/terminal/` = `VtParser` (máquina de estados Williams + UTF-8) + `Screen` (grade 2D, cursor, SGR cores/negrito/256/truecolor, CUP, erase, scroll, autowrap). 10 testes unitários (`dante_vt_test`) — lógica pura, roda no mac e no CI. **Independente do ConPTY.**
+- **F2 — falta:** render do `Screen` em QML (QPainter/QRhi) + input char-a-char + plugar no `TerminalController` (hoje usa strip/modo-linha). Depende de confirmar o ConPTY no Windows real.
 - ConPTY: drenar trailing-output antes do `ClosePseudoConsole` (hoje há janela mínima de corte); migrar a fila p/ SPSC lock-free se profiling pedir.

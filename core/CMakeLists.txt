@@ -1,5 +1,7 @@
 add_library(dante_core STATIC
     src/Ids.cpp
+    src/VtParser.cpp
+    src/Screen.cpp
 )
 add_library(dante::core ALIAS dante_core)
 
@@ -14,6 +16,11 @@ add_executable(dante_core_test tests/test_result.cpp)
 target_link_libraries(dante_core_test PRIVATE dante::core)
 dante_target_warnings(dante_core_test)
 
+add_executable(dante_vt_test tests/test_vt.cpp)
+target_link_libraries(dante_vt_test PRIVATE dante::core)
+dante_target_warnings(dante_vt_test)
+
 if(BUILD_TESTING)
     add_test(NAME dante_core_test COMMAND dante_core_test)
+    add_test(NAME dante_vt_test COMMAND dante_vt_test)
 endif()
