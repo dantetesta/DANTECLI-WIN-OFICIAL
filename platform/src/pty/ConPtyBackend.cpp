@@ -61,13 +61,9 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
         return fail("ConPTY: UpdateProcThreadAttribute falhou");
     }
 
-    // 5. Job Object com KILL_ON_JOB_CLOSE (limpeza transitiva do processo + filhos).
-    win::unique_handle job(::CreateJobObjectW(nullptr, nullptr));
-    if (job.valid()) {
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli{};
-        jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        ::SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
-    }
+    // 5. DIAG F1: Job Object removido temporariamente (sample oficial nao usa) p/ checar
+    //    se ele interferia na sessao do pseudoconsole. Re-adicionar depois.
+    win::unique_handle job;
 
     // 6. Cria o processo SUSPENSO, anexa ao job, depois resume — garante que o filho
     //    ja nasce dentro do job (sem janela de escape).
