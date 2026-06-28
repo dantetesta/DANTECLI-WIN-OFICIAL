@@ -113,6 +113,7 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
     closing_.store(false);
 
     reader_ = std::jthread([this] { readerLoop(); });
+    waiter_ = std::jthread([this] { waiterLoop(); });
     return {};
 }
 
@@ -168,93 +169,41 @@ void ConPtyBackend::close() {
 }
 
 void ConPtyBackend::readerLoop() {
+    // ReadFile BLOQUEANTE (padrao p/ ConPTY). Streama o output conforme o conhost escreve.
+    // O EOF vem quando o waiter chama ClosePseudoConsole (conhost fecha a ponta de escrita).
     char buffer[4096];
-    bool childExited = false;
-    int idlePolls = 0;
-    // O conhost renderiza/flusha a saida de forma ASSINCRONA — o output final do comando
-    // costuma chegar DEPOIS de o processo sinalizar saida. Por isso, apos o filho sair,
-    // damos uma janela de graca generosa de silencio antes de fechar (~400ms = 80 x 5ms);
-    // qualquer byte recebido reseta a contagem. So entao ClosePseudoConsole.
-    constexpr int kGracePolls = 80;
-
-    auto drainAvailable = [&] {
-        for (;;) {
-            DWORD avail = 0;
-            if (!::PeekNamedPipe(outputRead_.get(), nullptr, 0, nullptr, &avail, nullptr) || avail == 0) {
-                return;
-            }
-            const DWORD toRead = avail < sizeof(buffer) ? avail : static_cast<DWORD>(sizeof(buffer));
-            DWORD n = 0;
-            if (!::ReadFile(outputRead_.get(), buffer, toRead, &n, nullptr) || n == 0) {
-                return;
-            }
-            {
-                std::scoped_lock lk(outMtx_);
-                outQueue_.emplace(buffer, n);
-            }
-            outCv_.notify_one();
-            idlePolls = 0;
-        }
-    };
-
     std::size_t diagTotal = 0; // DIAG F1
-    int diagIters = 0;         // DIAG F1
     for (;;) {
-        ++diagIters; // DIAG F1
-        if (closing_.load()) {
-            childExited = true; // close(): o job ja matou o filho; drena o que sobrou
-        }
-
-        DWORD avail = 0;
-        if (!::PeekNamedPipe(outputRead_.get(), nullptr, 0, nullptr, &avail, nullptr)) {
-            std::fprintf(stderr, "[reader] Peek FALSE gle=%lu total=%zu iters=%d childExited=%d\n",
-                         ::GetLastError(), diagTotal, diagIters, childExited ? 1 : 0); // DIAG F1
-            break; // pipe quebrada
-        }
-        if (avail > 0) {
-            const DWORD toRead = avail < sizeof(buffer) ? avail : static_cast<DWORD>(sizeof(buffer));
-            DWORD n = 0;
-            if (!::ReadFile(outputRead_.get(), buffer, toRead, &n, nullptr) || n == 0) {
-                std::fprintf(stderr, "[reader] Read FALSE/0 gle=%lu n=%lu total=%zu\n",
-                             ::GetLastError(), n, diagTotal); // DIAG F1
-                break;
-            }
-            diagTotal += n; // DIAG F1
-            {
-                std::scoped_lock lk(outMtx_);
-                outQueue_.emplace(buffer, n);
-            }
-            outCv_.notify_one();
-            idlePolls = 0;
-            continue; // drena enquanto houver bytes (sem dormir)
-        }
-
-        // avail == 0: nada pendente agora.
-        if (!childExited && ::WaitForSingleObject(process_.get(), 0) == WAIT_OBJECT_0) {
-            childExited = true;
-            DWORD ec = 0;
-            ::GetExitCodeProcess(process_.get(), &ec);
-            std::fprintf(stderr, "[reader] childExited ec=%lu (0x%lX) total=%zu iters=%d\n", ec, ec,
-                         diagTotal, diagIters); // DIAG F1
-        }
-        if (childExited && ++idlePolls >= kGracePolls) {
-            std::fprintf(stderr, "[reader] grace close total=%zu iters=%d\n", diagTotal, diagIters); // DIAG F1
-            {
-                std::scoped_lock lk(pconMtx_);
-                pseudoConsole_.reset(); // ClosePseudoConsole
-            }
-            drainAvailable(); // pega o que o conhost soltar ao fechar
-            std::fprintf(stderr, "[reader] pos-close total=%zu\n", diagTotal); // DIAG F1
+        DWORD n = 0;
+        if (!::ReadFile(outputRead_.get(), buffer, sizeof(buffer), &n, nullptr) || n == 0) {
+            std::fprintf(stderr, "[reader] fim ReadFile gle=%lu total=%zu\n",
+                         ::GetLastError(), diagTotal); // DIAG F1
             break;
         }
-        ::Sleep(5);
+        diagTotal += n; // DIAG F1
+        {
+            std::scoped_lock lk(outMtx_);
+            outQueue_.emplace(buffer, n);
+        }
+        outCv_.notify_one();
     }
-
     {
         std::scoped_lock lk(outMtx_);
         finished_ = true;
     }
     outCv_.notify_all();
+}
+
+void ConPtyBackend::waiterLoop() {
+    // Espera o shell sair; da uma graca pro conhost flushar o frame final; entao fecha o
+    // pseudoconsole (ClosePseudoConsole quebra o ReadFile bloqueante do reader -> EOF).
+    ::WaitForSingleObject(process_.get(), INFINITE);
+    DWORD ec = 0;
+    ::GetExitCodeProcess(process_.get(), &ec);
+    ::Sleep(300); // graca pro flush final
+    std::fprintf(stderr, "[waiter] child ec=%lu (0x%lX), fechando pseudoconsole\n", ec, ec); // DIAG F1
+    std::scoped_lock lk(pconMtx_);
+    pseudoConsole_.reset(); // ClosePseudoConsole — unico ponto que fecha o HPCON em runtime
 }
 
 #else // ----- fora do Windows nao existe ConPTY -----

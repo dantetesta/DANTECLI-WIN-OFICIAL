@@ -44,6 +44,7 @@ public:
 private:
 #ifdef _WIN32
     void readerLoop();
+    void waiterLoop();
 
     // Fila de saida (reader -> read()). ponytail: mutex+condvar agora; trocar por
     // SPSC lock-free se profiling mostrar contencao (PRD 4.3).
@@ -65,6 +66,7 @@ private:
     win::unique_handle job_;                 // KILL_ON_JOB_CLOSE: fecha -> mata o filho
 
     std::jthread reader_;
+    std::jthread waiter_;
 #endif
 };
 
