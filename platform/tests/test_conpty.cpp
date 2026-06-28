@@ -75,16 +75,17 @@ int main() {
     using namespace std::chrono_literals;
     int failures = 0;
 
-    // 1) `cmd /c echo TOKEN` deve aparecer no stream do PTY.
+    // 1) ISOLACAO: processo que VIVE ~2s e produz saida deterministica (ping, sem stdin).
+    //    Se "127.0.0.1" aparecer, o relay de output funciona.
     {
         ConPtyBackend pty;
-        if (!pty.start("cmd.exe /c echo DANTE_CONPTY_OK", 80, 25)) {
+        if (!pty.start("ping -n 3 127.0.0.1", 80, 25)) {
             std::fprintf(stderr, "FAIL s1: start falhou\n");
             ++failures;
         } else {
-            const std::string out = driveUntil(pty, "DANTE_CONPTY_OK", 20s);
-            dumpEscaped("s1 echo", out);
-            if (out.find("DANTE_CONPTY_OK") == std::string::npos) {
+            const std::string out = driveUntil(pty, "127.0.0.1", 12s);
+            dumpEscaped("s1 ping", out);
+            if (out.find("127.0.0.1") == std::string::npos) {
                 std::fprintf(stderr, "FAIL s1: token nao encontrado\n");
                 ++failures;
             }
