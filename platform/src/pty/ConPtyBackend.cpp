@@ -1,5 +1,6 @@
 #include <dante/platform/pty/ConPtyBackend.hpp>
 
+#include <cstdio> // DIAG F1: instrumentacao temporaria do reader
 #include <string>
 #include <vector>
 
@@ -195,21 +196,29 @@ void ConPtyBackend::readerLoop() {
         }
     };
 
+    std::size_t diagTotal = 0; // DIAG F1
+    int diagIters = 0;         // DIAG F1
     for (;;) {
+        ++diagIters; // DIAG F1
         if (closing_.load()) {
             childExited = true; // close(): o job ja matou o filho; drena o que sobrou
         }
 
         DWORD avail = 0;
         if (!::PeekNamedPipe(outputRead_.get(), nullptr, 0, nullptr, &avail, nullptr)) {
+            std::fprintf(stderr, "[reader] Peek FALSE gle=%lu total=%zu iters=%d childExited=%d\n",
+                         ::GetLastError(), diagTotal, diagIters, childExited ? 1 : 0); // DIAG F1
             break; // pipe quebrada
         }
         if (avail > 0) {
             const DWORD toRead = avail < sizeof(buffer) ? avail : static_cast<DWORD>(sizeof(buffer));
             DWORD n = 0;
             if (!::ReadFile(outputRead_.get(), buffer, toRead, &n, nullptr) || n == 0) {
+                std::fprintf(stderr, "[reader] Read FALSE/0 gle=%lu n=%lu total=%zu\n",
+                             ::GetLastError(), n, diagTotal); // DIAG F1
                 break;
             }
+            diagTotal += n; // DIAG F1
             {
                 std::scoped_lock lk(outMtx_);
                 outQueue_.emplace(buffer, n);
@@ -222,13 +231,17 @@ void ConPtyBackend::readerLoop() {
         // avail == 0: nada pendente agora.
         if (!childExited && ::WaitForSingleObject(process_.get(), 0) == WAIT_OBJECT_0) {
             childExited = true;
+            std::fprintf(stderr, "[reader] childExited detectado total=%zu iters=%d\n",
+                         diagTotal, diagIters); // DIAG F1
         }
         if (childExited && ++idlePolls >= kGracePolls) {
+            std::fprintf(stderr, "[reader] grace close total=%zu iters=%d\n", diagTotal, diagIters); // DIAG F1
             {
                 std::scoped_lock lk(pconMtx_);
                 pseudoConsole_.reset(); // ClosePseudoConsole
             }
             drainAvailable(); // pega o que o conhost soltar ao fechar
+            std::fprintf(stderr, "[reader] pos-close total=%zu\n", diagTotal); // DIAG F1
             break;
         }
         ::Sleep(5);
