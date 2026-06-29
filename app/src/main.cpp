@@ -11,6 +11,7 @@
 #include <QQuickWindow>
 #include <QTextStream>
 #include <QTimer>
+#include <QUrl>
 
 #include <string_view>
 
@@ -48,7 +49,10 @@ int main(int argc, char* argv[]) {
                          }
                      });
 
-    engine.loadFromModule("Dante", "Main");
+    // Carrega o Main.qml direto do recurso embutido. loadFromModule("Dante","Main") falha
+    // no Release/MSVC ("Module Dante contains no type named Main" — o registro do tipo some
+    // no link), mas o arquivo está no qrc; carregá-lo direto independe do registro por tipo.
+    engine.load(QUrl(QStringLiteral("qrc:/Dante/qml/Main.qml")));
     const bool qmlOk = !engine.rootObjects().isEmpty();
 
     if (selftest) {
