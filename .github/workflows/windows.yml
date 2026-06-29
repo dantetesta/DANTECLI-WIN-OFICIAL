@@ -75,6 +75,10 @@ jobs:
           Write-Host "Rodando $exe --selftest (offscreen)..."
           $p = Start-Process $exe -ArgumentList "--selftest" -Wait -PassThru
           Write-Host "EXIT=$($p.ExitCode)"
+          if (Test-Path "deploy/DanteCLI/selftest.txt") {
+            Write-Host "--- selftest.txt ---"; Get-Content "deploy/DanteCLI/selftest.txt"
+            Copy-Item "deploy/DanteCLI/selftest.txt" "DanteCLI-selftest.txt"
+          } else { Write-Host "(sem selftest.txt)" }
           $log = Join-Path $env:LOCALAPPDATA "DANTE CLI\logs\dante.log"
           if (Test-Path $log) { Write-Host "--- dante.log ---"; Get-Content $log -Tail 40 }
           else { Write-Host "(sem dante.log — app morreu antes do main)" }
@@ -100,4 +104,5 @@ jobs:
             DanteCLI-portatil.zip
             installer/Output/*.exe
             DanteCLI-screenshot.png
+            DanteCLI-selftest.txt
           if-no-files-found: warn

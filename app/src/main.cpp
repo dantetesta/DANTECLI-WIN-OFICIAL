@@ -2,11 +2,14 @@
 #include "dante/ui/AppController.hpp"
 #include "dante/ui/TerminalController.hpp"
 
+#include <QFile>
 #include <QGuiApplication>
 #include <QImage>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlError>
 #include <QQuickWindow>
+#include <QTextStream>
 #include <QTimer>
 
 #include <string_view>
@@ -16,9 +19,6 @@ int main(int argc, char* argv[]) {
     QGuiApplication::setOrganizationName("DanteCLI");
     QGuiApplication::setApplicationName("DANTE CLI");
 
-    // --selftest: smoke headless p/ o CI rodar o .exe empacotado no runner Windows.
-    // Sobe Qt, carrega o QML, salva um print e sai com 0 (ok) / 3 (QML falhou). Os
-    // resultados vão pro dante.log (app é GUI, sem stderr/console).
     bool selftest = false;
     for (int i = 1; i < argc; ++i) {
         if (std::string_view(argv[i]) == "--selftest") {
@@ -32,30 +32,55 @@ int main(int argc, char* argv[]) {
     dante::TerminalController terminal;
 
     QQmlApplicationEngine engine;
+    // App empacotado: o engine precisa achar os módulos QML deployados (windeployqt)
+    // ao lado do exe. Sem isso, "import QtQuick.Controls.Basic" falha e o QML não carrega
+    // -> rootObjects vazio -> a janela nunca aparece.
+    engine.addImportPath(QCoreApplication::applicationDirPath() + "/qml");
+
     engine.rootContext()->setContextProperty("App", &controller);
     engine.rootContext()->setContextProperty("Term", &terminal);
-    engine.loadFromModule("Dante", "Main");
 
+    QStringList qmlErrors;
+    QObject::connect(&engine, &QQmlApplicationEngine::warnings,
+                     [&qmlErrors](const QList<QQmlError>& ws) {
+                         for (const auto& w : ws) {
+                             qmlErrors << w.toString();
+                         }
+                     });
+
+    engine.loadFromModule("Dante", "Main");
     const bool qmlOk = !engine.rootObjects().isEmpty();
 
     if (selftest) {
-        qWarning("SELFTEST qml=%s objs=%d", qmlOk ? "OK" : "FAIL",
-                 static_cast<int>(engine.rootObjects().size()));
+        // Relatório robusto num arquivo ao lado do exe (o log às vezes não flusha a tempo).
+        QFile f(QCoreApplication::applicationDirPath() + "/selftest.txt");
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream out(&f);
+            out << "qml=" << (qmlOk ? "OK" : "FAIL") << " objs=" << engine.rootObjects().size()
+                << "\n";
+            out << "appDir=" << QCoreApplication::applicationDirPath() << "\n";
+            out << "importPaths:\n";
+            for (const auto& p : engine.importPathList()) {
+                out << "  " << p << "\n";
+            }
+            out << "qmlErrors:\n";
+            for (const auto& e : qmlErrors) {
+                out << "  " << e << "\n";
+            }
+        }
         if (!qmlOk) {
             return 3;
         }
         auto* win = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
         if (win == nullptr) {
-            qWarning("SELFTEST window=none");
             return 0;
         }
         win->setVisible(true);
         QTimer::singleShot(1200, &app, [&app, win] {
             const QImage img = win->grabWindow();
-            const QString path = QCoreApplication::applicationDirPath() + "/dante-selftest.png";
-            const bool saved = !img.isNull() && img.save(path);
-            qWarning("SELFTEST screenshot=%dx%d saved=%d", img.width(), img.height(),
-                     saved ? 1 : 0);
+            if (!img.isNull()) {
+                img.save(QCoreApplication::applicationDirPath() + "/dante-selftest.png");
+            }
             app.exit(0);
         });
         return app.exec();
