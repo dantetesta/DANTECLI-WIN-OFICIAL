@@ -64,6 +64,25 @@ jobs:
           Compress-Archive -Path "$deploy/*" -DestinationPath "DanteCLI-portatil.zip" -Force
           Write-Host "Conteúdo do pacote:"; Get-ChildItem $deploy -Name
 
+      - name: Smoke do app (roda o .exe empacotado no runner Windows)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: |
+          $exe = "deploy/DanteCLI/DanteCLI.exe"
+          Write-Host "Rodando $exe --selftest (offscreen)..."
+          $p = Start-Process $exe -ArgumentList "--selftest" -Wait -PassThru
+          Write-Host "EXIT=$($p.ExitCode)"
+          $log = Join-Path $env:LOCALAPPDATA "DANTE CLI\logs\dante.log"
+          if (Test-Path $log) { Write-Host "--- dante.log ---"; Get-Content $log -Tail 40 }
+          else { Write-Host "(sem dante.log — app morreu antes do main)" }
+          if (Test-Path "deploy/DanteCLI/dante-selftest.png") {
+            Copy-Item "deploy/DanteCLI/dante-selftest.png" "DanteCLI-screenshot.png"; Write-Host "screenshot ok"
+          } else { Write-Host "(sem screenshot)" }
+          if ($p.ExitCode -ne 0) { throw "App NAO passou no selftest (exit=$($p.ExitCode))" }
+
       - name: Instalador (Inno Setup — best-effort)
         if: matrix.config == 'Release'
         continue-on-error: true
@@ -73,11 +92,12 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/dante.iss
 
       - name: Upload artefatos Windows
-        if: matrix.config == 'Release'
+        if: ${{ always() && matrix.config == 'Release' }}
         uses: actions/upload-artifact@v4
         with:
           name: DanteCLI-windows
           path: |
             DanteCLI-portatil.zip
             installer/Output/*.exe
+            DanteCLI-screenshot.png
           if-no-files-found: warn
