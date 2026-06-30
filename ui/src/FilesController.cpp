@@ -1,7 +1,11 @@
 #include "dante/ui/FilesController.hpp"
 
+#include <QClipboard>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QProcess>
 #include <QStandardPaths>
 #include <QVariantMap>
 
@@ -65,6 +69,57 @@ QString FilesController::standard(const QString& which) const {
 QString FilesController::baseName(const QString& path) const {
     const QString name = QDir(path).dirName();
     return name.isEmpty() ? path : name; // raiz ("/") nao tem dirName
+}
+
+QString FilesController::parentDir(const QString& path) const {
+    QDir d(path);
+    return d.cdUp() ? d.absolutePath() : path;
+}
+
+void FilesController::revealInOS(const QString& path) const {
+#if defined(Q_OS_MAC)
+    QProcess::startDetached("open", {"-R", path});
+#elif defined(Q_OS_WIN)
+    QProcess::startDetached("explorer.exe", {"/select," + QDir::toNativeSeparators(path)});
+#else
+    QProcess::startDetached("xdg-open", {QFileInfo(path).absolutePath()});
+#endif
+}
+
+void FilesController::copyPath(const QString& path) const {
+    if (auto* cb = QGuiApplication::clipboard()) {
+        cb->setText(path);
+    }
+}
+
+bool FilesController::makeFolder(const QString& parent, const QString& name) const {
+    if (name.trimmed().isEmpty()) {
+        return false;
+    }
+    return QDir(parent).mkdir(name);
+}
+
+bool FilesController::makeFile(const QString& parent, const QString& name) const {
+    if (name.trimmed().isEmpty()) {
+        return false;
+    }
+    QFile f(QDir(parent).absoluteFilePath(name));
+    if (f.exists()) {
+        return false;
+    }
+    return f.open(QIODevice::WriteOnly) && (f.close(), true);
+}
+
+bool FilesController::renamePath(const QString& path, const QString& newName) const {
+    if (newName.trimmed().isEmpty()) {
+        return false;
+    }
+    const QFileInfo fi(path);
+    return QFile::rename(path, fi.absoluteDir().absoluteFilePath(newName));
+}
+
+bool FilesController::trashPath(const QString& path) const {
+    return QFile::moveToTrash(path);
 }
 
 QString FilesController::displayPath(const QString& path) const {

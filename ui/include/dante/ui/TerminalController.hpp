@@ -28,6 +28,8 @@ public:
     Q_INVOKABLE void start();                  // spawna o shell (idempotente)
     Q_INVOKABLE void send(const QString& text); // escreve no shell (ex.: "dir\r")
     Q_INVOKABLE void clearOutput();            // limpa a tela do terminal
+    // pede pra UI inserir texto no campo de comando (ex.: transcrição do mic) — não envia.
+    Q_INVOKABLE void requestInsert(const QString& t) { emit insertRequested(t); }
 
     QString output() const { return output_; }
     bool running() const { return running_; }
@@ -35,6 +37,7 @@ public:
 signals:
     void outputChanged();
     void runningChanged();
+    void insertRequested(const QString& text);
 
 private:
     void readerLoop();

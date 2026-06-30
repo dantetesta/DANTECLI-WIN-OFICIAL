@@ -29,6 +29,15 @@ public:
     Q_INVOKABLE QString displayPath(const QString& path) const; // home -> "~"
     Q_INVOKABLE QString fromUrl(const QUrl& u) const { return u.toLocalFile(); }
     Q_INVOKABLE void toggleHidden() { setShowHidden(!showHidden_); }
+    Q_INVOKABLE QString parentDir(const QString& path) const;
+
+    // Ações do menu de contexto. As de FS retornam true em sucesso (QML recarrega a árvore).
+    Q_INVOKABLE void revealInOS(const QString& path) const;     // Finder/Explorer com o item selecionado
+    Q_INVOKABLE void copyPath(const QString& path) const;       // caminho -> clipboard
+    Q_INVOKABLE bool makeFolder(const QString& parent, const QString& name) const;
+    Q_INVOKABLE bool makeFile(const QString& parent, const QString& name) const;
+    Q_INVOKABLE bool renamePath(const QString& path, const QString& newName) const;
+    Q_INVOKABLE bool trashPath(const QString& path) const;
 
 signals:
     void rootChanged();

@@ -1,7 +1,9 @@
 #include "Logging.hpp"
 #include "dante/ui/AppController.hpp"
 #include "dante/ui/FilesController.hpp"
+#include "dante/ui/SettingsController.hpp"
 #include "dante/ui/SysStatsController.hpp"
+#include "dante/ui/VoiceController.hpp"
 #include "dante/ui/TerminalController.hpp"
 
 #include <QFile>
@@ -35,6 +37,8 @@ int main(int argc, char* argv[]) {
     dante::AppController controller;
     dante::SysStatsController sysStats;
     dante::FilesController files;
+    dante::SettingsController settings;
+    dante::VoiceController voice;
 
     // TerminalController instanciável no QML (grid de terminais: 1 por célula).
     qmlRegisterType<dante::TerminalController>("Backend", 1, 0, "TerminalController");
@@ -48,6 +52,8 @@ int main(int argc, char* argv[]) {
     engine.rootContext()->setContextProperty("App", &controller);
     engine.rootContext()->setContextProperty("Sys", &sysStats);
     engine.rootContext()->setContextProperty("Files", &files);
+    engine.rootContext()->setContextProperty("Settings", &settings);
+    engine.rootContext()->setContextProperty("Voice", &voice);
 
     QStringList qmlErrors;
     QObject::connect(&engine, &QQmlApplicationEngine::warnings,
