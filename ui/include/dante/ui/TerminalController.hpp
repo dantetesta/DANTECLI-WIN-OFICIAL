@@ -27,6 +27,7 @@ public:
 
     Q_INVOKABLE void start();                  // spawna o shell (idempotente)
     Q_INVOKABLE void send(const QString& text); // escreve no shell (ex.: "dir\r")
+    Q_INVOKABLE void clearOutput();            // limpa a tela do terminal
 
     QString output() const { return output_; }
     bool running() const { return running_; }

@@ -36,6 +36,11 @@ void TerminalController::start() {
     reader_ = std::thread([this] { readerLoop(); });
 }
 
+void TerminalController::clearOutput() {
+    output_.clear();
+    emit outputChanged();
+}
+
 void TerminalController::send(const QString& text) {
     if (!pty_) {
         return;

@@ -1,5 +1,7 @@
 #include "Logging.hpp"
 #include "dante/ui/AppController.hpp"
+#include "dante/ui/FilesController.hpp"
+#include "dante/ui/SysStatsController.hpp"
 #include "dante/ui/TerminalController.hpp"
 
 #include <QFile>
@@ -12,6 +14,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QUrl>
+#include <QtQml>
 
 #include <string_view>
 
@@ -30,7 +33,11 @@ int main(int argc, char* argv[]) {
     dante::installFileLogger();
 
     dante::AppController controller;
-    dante::TerminalController terminal;
+    dante::SysStatsController sysStats;
+    dante::FilesController files;
+
+    // TerminalController instanciável no QML (grid de terminais: 1 por célula).
+    qmlRegisterType<dante::TerminalController>("Backend", 1, 0, "TerminalController");
 
     QQmlApplicationEngine engine;
     // App empacotado: o engine precisa achar os módulos QML deployados (windeployqt)
@@ -39,7 +46,8 @@ int main(int argc, char* argv[]) {
     engine.addImportPath(QCoreApplication::applicationDirPath() + "/qml");
 
     engine.rootContext()->setContextProperty("App", &controller);
-    engine.rootContext()->setContextProperty("Term", &terminal);
+    engine.rootContext()->setContextProperty("Sys", &sysStats);
+    engine.rootContext()->setContextProperty("Files", &files);
 
     QStringList qmlErrors;
     QObject::connect(&engine, &QQmlApplicationEngine::warnings,

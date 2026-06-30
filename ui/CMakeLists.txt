@@ -3,6 +3,10 @@ qt_add_library(dante_ui STATIC
     include/dante/ui/AppController.hpp
     src/TerminalController.cpp
     include/dante/ui/TerminalController.hpp
+    src/SysStatsController.cpp
+    include/dante/ui/SysStatsController.hpp
+    src/FilesController.cpp
+    include/dante/ui/FilesController.hpp
 )
 add_library(dante::ui ALIAS dante_ui)
 

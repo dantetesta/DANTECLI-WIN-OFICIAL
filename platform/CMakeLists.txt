@@ -3,6 +3,7 @@ add_library(dante_platform STATIC
     src/PtyFactory.cpp
     src/memstat/MemStat.cpp
     src/secrets/DpapiSecrets.cpp
+    src/SysStats.cpp
 )
 add_library(dante::platform ALIAS dante_platform)
 
