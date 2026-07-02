@@ -14,7 +14,9 @@ public:
 
     virtual void print(char32_t cp) = 0;           // glifo imprimível
     virtual void execute(std::uint8_t control) = 0; // controle C0 (LF, CR, BS, HT, BEL...)
-    virtual void csi(char finalByte, const std::vector<int>& params) = 0; // ESC [ ... <final>
+    // priv = marcador privado ('?','<','=','>') ou '\0' se ausente. ESC[?25l (priv='?') NÃO
+    // é o mesmo comando que ESC[25l (priv='\0') — o sink precisa distinguir.
+    virtual void csi(char priv, char finalByte, const std::vector<int>& params) = 0; // ESC [ ... <final>
     virtual void osc(const std::string& data) = 0;  // ESC ] ... (BEL|ST)
     virtual void esc(char finalByte) = 0;           // ESC <final> simples (sem CSI/OSC)
 };
@@ -47,6 +49,7 @@ private:
     std::vector<int> params_;
     int curParam_ = 0;
     bool hasParam_ = false;
+    char priv_ = 0; // marcador privado do CSI (?<=>), '\0' se nenhum
 
     std::string osc_;
 

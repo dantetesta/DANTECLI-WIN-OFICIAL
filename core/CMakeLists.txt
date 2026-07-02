@@ -2,6 +2,7 @@ add_library(dante_core STATIC
     src/Ids.cpp
     src/VtParser.cpp
     src/Screen.cpp
+    src/Router.cpp
 )
 add_library(dante::core ALIAS dante_core)
 
@@ -20,7 +21,12 @@ add_executable(dante_vt_test tests/test_vt.cpp)
 target_link_libraries(dante_vt_test PRIVATE dante::core)
 dante_target_warnings(dante_vt_test)
 
+add_executable(dante_router_test tests/test_router.cpp)
+target_link_libraries(dante_router_test PRIVATE dante::core)
+dante_target_warnings(dante_router_test)
+
 if(BUILD_TESTING)
     add_test(NAME dante_core_test COMMAND dante_core_test)
     add_test(NAME dante_vt_test COMMAND dante_vt_test)
+    add_test(NAME dante_router_test COMMAND dante_router_test)
 endif()

@@ -3,6 +3,21 @@ qt_add_library(dante_ui STATIC
     include/dante/ui/AppController.hpp
     src/TerminalController.cpp
     include/dante/ui/TerminalController.hpp
+    src/TerminalView.cpp
+    include/dante/ui/TerminalView.hpp
+    src/CodeHighlighter.cpp
+    include/dante/ui/CodeHighlighter.hpp
+    src/SysStatsController.cpp
+    include/dante/ui/SysStatsController.hpp
+    src/FilesController.cpp
+    include/dante/ui/FilesController.hpp
+    src/SettingsController.cpp
+    include/dante/ui/SettingsController.hpp
+    src/VoiceController.cpp
+    include/dante/ui/VoiceController.hpp
+    src/StoreController.cpp
+    include/dante/ui/StoreController.hpp
+    include/dante/ui/SecretsController.hpp
 )
 add_library(dante::ui ALIAS dante_ui)
 
@@ -18,6 +33,10 @@ target_link_libraries(dante_ui
         dante::platform
         dante::persistence
         Qt6::Core
+        Qt6::Gui
+        Qt6::Quick
+        Qt6::Network
+        Qt6::Multimedia
 )
 
 dante_target_warnings(dante_ui)

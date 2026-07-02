@@ -1,6 +1,14 @@
 #include "Logging.hpp"
 #include "dante/ui/AppController.hpp"
+#include "dante/ui/CodeHighlighter.hpp"
+#include "dante/ui/FilesController.hpp"
+#include "dante/ui/SecretsController.hpp"
+#include "dante/ui/SettingsController.hpp"
+#include "dante/ui/StoreController.hpp"
+#include "dante/ui/SysStatsController.hpp"
+#include "dante/ui/VoiceController.hpp"
 #include "dante/ui/TerminalController.hpp"
+#include "dante/ui/TerminalView.hpp"
 
 #include <QFile>
 #include <QGuiApplication>
@@ -12,6 +20,7 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QUrl>
+#include <QtQml>
 
 #include <string_view>
 
@@ -30,7 +39,19 @@ int main(int argc, char* argv[]) {
     dante::installFileLogger();
 
     dante::AppController controller;
-    dante::TerminalController terminal;
+    dante::SysStatsController sysStats;
+    dante::FilesController files;
+    dante::SettingsController settings;
+    dante::VoiceController voice;
+    dante::StoreController store; // SQLite: persiste favoritos/snippets
+    dante::SecretsController secrets; // DPAPI: segredos de credenciais (lazy)
+
+    // TerminalController instanciável no QML (grid de terminais: 1 por célula).
+    qmlRegisterType<dante::TerminalController>("Backend", 1, 0, "TerminalController");
+    // TerminalView: renderer QPainter da grade do terminal (F2).
+    qmlRegisterType<dante::TerminalView>("Backend", 1, 0, "TerminalView");
+    // CodeHighlighter: realce mínimo do editor (F5), attacha no textDocument do TextArea.
+    qmlRegisterType<dante::CodeHighlighter>("Backend", 1, 0, "CodeHighlighter");
 
     QQmlApplicationEngine engine;
     // App empacotado: o engine precisa achar os módulos QML deployados (windeployqt)
@@ -39,7 +60,12 @@ int main(int argc, char* argv[]) {
     engine.addImportPath(QCoreApplication::applicationDirPath() + "/qml");
 
     engine.rootContext()->setContextProperty("App", &controller);
-    engine.rootContext()->setContextProperty("Term", &terminal);
+    engine.rootContext()->setContextProperty("Sys", &sysStats);
+    engine.rootContext()->setContextProperty("Files", &files);
+    engine.rootContext()->setContextProperty("Settings", &settings);
+    engine.rootContext()->setContextProperty("Voice", &voice);
+    engine.rootContext()->setContextProperty("Store", &store);
+    engine.rootContext()->setContextProperty("Secrets", &secrets);
 
     QStringList qmlErrors;
     QObject::connect(&engine, &QQmlApplicationEngine::warnings,

@@ -14,6 +14,28 @@ Screen::Screen(int cols, int rows)
     : cols_(std::max(1, cols)), rows_(std::max(1, rows)),
       grid_(static_cast<std::size_t>(cols_) * static_cast<std::size_t>(rows_)), parser_(*this) {}
 
+void Screen::resize(int cols, int rows) {
+    cols = std::max(1, cols);
+    rows = std::max(1, rows);
+    if (cols == cols_ && rows == rows_) {
+        return;
+    }
+    std::vector<Cell> next(static_cast<std::size_t>(cols) * static_cast<std::size_t>(rows));
+    const int cc = std::min(cols, cols_);
+    const int rr = std::min(rows, rows_);
+    for (int r = 0; r < rr; ++r) {
+        for (int c = 0; c < cc; ++c) {
+            next[static_cast<std::size_t>(r) * static_cast<std::size_t>(cols) +
+                 static_cast<std::size_t>(c)] = cell(r, c);
+        }
+    }
+    grid_ = std::move(next);
+    cols_ = cols;
+    rows_ = rows;
+    row_ = clampi(row_, 0, rows_ - 1);
+    col_ = clampi(col_, 0, cols_ - 1);
+}
+
 Cell Screen::blank() const {
     Cell c;
     c.bg = curBg_; // erase usa o fundo atual
@@ -201,7 +223,13 @@ void Screen::applySgr(const std::vector<int>& params) {
     }
 }
 
-void Screen::csi(char finalByte, const std::vector<int>& params) {
+void Screen::csi(char priv, char finalByte, const std::vector<int>& params) {
+    // Sequências privadas (ESC[?…, ESC[<…, ESC[>…) são modos DEC (cursor visível, tela
+    // alternativa, mouse…) — não implementados neste marco. Ignorar em vez de tratar como
+    // CSI público (senão ESC[?2J apagaria a tela como se fosse ESC[2J).
+    if (priv != 0) {
+        return;
+    }
     switch (finalByte) {
     case 'A':
         row_ = clampi(row_ - paramOr(params, 0, 1), 0, rows_ - 1);

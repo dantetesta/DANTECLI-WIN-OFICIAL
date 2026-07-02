@@ -5,6 +5,7 @@ namespace dante::term {
 namespace {
 constexpr int kMaxParams = 32;
 constexpr int kMaxParamVal = 65535;
+constexpr std::size_t kMaxOsc = 4096; // cap anti-DoS: OSC sem terminador não pode crescer sem limite
 } // namespace
 
 void VtParser::feed(std::string_view bytes) {
@@ -49,7 +50,7 @@ void VtParser::dispatchCsi(std::uint8_t finalByte) {
             params_.push_back(curParam_);
         }
     }
-    sink_.csi(static_cast<char>(finalByte), params_);
+    sink_.csi(priv_, static_cast<char>(finalByte), params_);
 }
 
 void VtParser::byte(std::uint8_t b) {
@@ -69,6 +70,7 @@ void VtParser::byte(std::uint8_t b) {
             params_.clear();
             curParam_ = 0;
             hasParam_ = false;
+            priv_ = 0;
             state_ = State::CsiParam;
         } else if (b == ']') {
             osc_.clear();
@@ -101,10 +103,12 @@ void VtParser::byte(std::uint8_t b) {
             state_ = State::Esc; // aborta o CSI
         } else if (b >= 0x20 && b <= 0x2F) {
             state_ = State::CsiIgnore; // intermediários: ignora a sequência
+        } else if (b >= 0x3C && b <= 0x3F) {
+            priv_ = static_cast<char>(b); // marcador privado (?<=>): distingue ESC[?25l de ESC[25l
         } else if (b < 0x20) {
             sink_.execute(b); // controle dentro do CSI: executa, mantém estado
         }
-        // 0x3A (':') e privados (0x3C-0x3F) caem aqui e são ignorados silenciosamente
+        // 0x3A (':') cai aqui e é ignorado silenciosamente
         break;
 
     case State::CsiIgnore:
@@ -121,8 +125,8 @@ void VtParser::byte(std::uint8_t b) {
             state_ = State::Ground;
         } else if (b == 0x1B) {
             state_ = State::OscEsc;
-        } else {
-            osc_ += static_cast<char>(b);
+        } else if (osc_.size() < kMaxOsc) {
+            osc_ += static_cast<char>(b); // além do cap, os bytes são descartados (seq. continua)
         }
         break;
 
