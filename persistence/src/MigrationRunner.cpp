@@ -29,16 +29,33 @@ Result<int> MigrationRunner::apply(Database& db) {
     }
 
     // Empty table => fresh DB: seed version 0 exactly once (idempotent).
-    if (!query.next()) {
-        if (!query.exec(QStringLiteral("INSERT INTO schema_version (version) VALUES (0)"))) {
-            return std::unexpected(Error{
-                ("MigrationRunner: cannot seed schema_version: " + query.lastError().text())
-                    .toStdString()});
-        }
-        return 0;
+    int version = 0;
+    if (query.next()) {
+        version = query.value(0).toInt();
+    } else if (!query.exec(QStringLiteral("INSERT INTO schema_version (version) VALUES (0)"))) {
+        return std::unexpected(Error{
+            ("MigrationRunner: cannot seed schema_version: " + query.lastError().text())
+                .toStdString()});
     }
 
-    return query.value(0).toInt();
+    // Passos versionados e idempotentes (gotcha #2: nunca coluna NOT NULL sem default; nunca
+    // apagar dados do usuário). Cada passo roda uma vez; um binário antigo lendo um schema mais
+    // novo continua funcionando porque só adicionamos, nunca removemos.
+    // v1: tabela chave-valor (favoritos/snippets serializados como JSON).
+    if (version < 1) {
+        if (!query.exec(QStringLiteral(
+                "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)"))) {
+            return std::unexpected(Error{
+                ("MigrationRunner: cannot create kv: " + query.lastError().text()).toStdString()});
+        }
+        if (!query.exec(QStringLiteral("UPDATE schema_version SET version = 1"))) {
+            return std::unexpected(Error{
+                ("MigrationRunner: cannot bump to v1: " + query.lastError().text()).toStdString()});
+        }
+        version = 1;
+    }
+
+    return version;
 }
 
 } // namespace dante

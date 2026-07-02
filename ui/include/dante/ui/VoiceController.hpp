@@ -1,5 +1,7 @@
 #pragma once
 
+#include <dante/platform/secrets/DpapiSecrets.hpp>
+
 #include <QAudioFormat>
 #include <QByteArray>
 #include <QObject>
@@ -13,7 +15,8 @@ class QNetworkAccessManager;
 namespace dante {
 
 // Mic -> Groq Whisper. toggle() grava; ao parar, sobe o WAV pra api.groq.com e
-// emite transcribed(texto). A chave/modelo vêm do QSettings (Configurações).
+// emite transcribed(texto). A chave vem cifrada do cofre DPAPI (gotcha #6, lazy: só
+// decifra no momento do upload); o modelo, do QSettings (Configurações).
 class VoiceController : public QObject {
     Q_OBJECT
     Q_PROPERTY(int state READ state NOTIFY changed)      // 0 idle · 1 gravando · 2 transcrevendo
@@ -38,6 +41,7 @@ private:
     void setState(int s);
     void fail(const QString& msg);
     QByteArray wavFromPcm() const;
+    QString groqKey() const; // decifra a chave do cofre DPAPI (lazy)
 
     int state_ = 0;
     QString error_;
@@ -46,6 +50,7 @@ private:
     QByteArray pcm_;
     QAudioFormat fmt_;
     QNetworkAccessManager* net_ = nullptr;
+    DpapiSecrets secrets_;
 };
 
 } // namespace dante

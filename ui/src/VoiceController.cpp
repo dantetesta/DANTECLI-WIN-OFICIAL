@@ -48,10 +48,14 @@ void VoiceController::toggle() {
     // state_ == 2 (transcrevendo): ignora cliques até terminar.
 }
 
+QString VoiceController::groqKey() const {
+    auto r = secrets_.load("groq/apiKey"); // mesma chave que SettingsController::kGroqKeySecret
+    return r ? QString::fromStdString(*r).trimmed() : QString();
+}
+
 void VoiceController::startRecording() {
     error_.clear();
-    const QSettings cfg;
-    if (cfg.value("groq/apiKey").toString().trimmed().isEmpty()) {
+    if (groqKey().isEmpty()) {
         fail("Configure a Groq API Key em Configurações.");
         return;
     }
@@ -123,8 +127,8 @@ void VoiceController::stopAndTranscribe() {
     }
     setState(2);
 
+    const QString key = groqKey();
     const QSettings cfg;
-    const QString key = cfg.value("groq/apiKey").toString().trimmed();
     const QString model = cfg.value("groq/model", "whisper-large-v3").toString();
 
     auto* multi = new QHttpMultiPart(QHttpMultiPart::FormDataType);

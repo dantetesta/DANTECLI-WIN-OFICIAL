@@ -100,6 +100,34 @@ int main() {
         CHECK(s.at(1, 0).ch == U'd', "autowrap -> linha1");
     }
 
+    // Resize preserva o canto superior-esquerdo e faz clamp do cursor.
+    {
+        Screen s(10, 4);
+        s.feed("abc\r\ndef");
+        s.resize(6, 2);
+        CHECK(s.at(0, 0).ch == U'a' && s.at(0, 2).ch == U'c', "resize preservou linha0");
+        CHECK(s.at(1, 0).ch == U'd', "resize preservou linha1");
+        CHECK(s.cols() == 6 && s.rows() == 2, "resize dims");
+        CHECK(s.cursorRow() < 2 && s.cursorCol() < 6, "cursor clampado no resize");
+    }
+
+    // CSI privado (ESC[?…) NÃO deve agir como CSI público: ESC[?2J não apaga a tela.
+    {
+        Screen s(20, 5);
+        s.feed("ABC\x1b[?2J");
+        CHECK(s.at(0, 0).ch == U'A' && s.at(0, 2).ch == U'C', "CSI privado ?2J ignorado");
+    }
+
+    // OSC sem terminador não cresce sem limite (cap 4096). Não deve estourar memória.
+    {
+        Screen s(20, 5);
+        std::string big = "\x1b]0;";
+        big.append(10000, 'x'); // título gigante sem BEL/ST
+        big += "\x07";
+        s.feed(big);
+        CHECK(s.title().size() <= 4096, "OSC capado em 4096");
+    }
+
     if (g_fail > 0) {
         std::fprintf(stderr, "%d checagem(ns) falharam\n", g_fail);
         return 1;

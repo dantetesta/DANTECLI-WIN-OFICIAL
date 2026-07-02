@@ -18,7 +18,8 @@ target_link_libraries(dante_platform
 
 # GetProcessMemoryInfo (gotcha #8) vive em Psapi no Windows.
 if(WIN32)
-    target_link_libraries(dante_platform PRIVATE Psapi)
+    # Psapi: GetProcessMemoryInfo (gotcha #8). Crypt32: DPAPI (CryptProtectData) dos segredos.
+    target_link_libraries(dante_platform PRIVATE Psapi Crypt32)
     # ConPTY exige Windows 10+ (_WIN32_WINNT). Os headers ja se autoprotegem, mas
     # fixamos no alvo pra consistencia entre TUs. WIN32_LEAN_AND_MEAN/NOMINMAX evitam ruido.
     target_compile_definitions(dante_platform PRIVATE

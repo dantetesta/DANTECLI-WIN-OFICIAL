@@ -9,6 +9,15 @@ namespace dante {
 
 namespace {
 
+// cols/rows chegam como uint16_t (ate 65535); COORD usa SHORT (ate 32767). Sem clamp,
+// um valor > 32767 vira negativo no cast e o conhost recebe dimensao invalida.
+SHORT clampDim(std::uint16_t v) {
+    if (v < 1) {
+        return 1;
+    }
+    return v > 9999 ? 9999 : static_cast<SHORT>(v);
+}
+
 std::wstring utf8ToWide(const std::string& s) {
     if (s.empty()) {
         return {};
@@ -39,7 +48,7 @@ Result<void> ConPtyBackend::start(const std::string& command, std::uint16_t cols
     }
 
     // 2. Pseudoconsole. O filho le de inputRead e escreve em outputWrite.
-    const COORD size{static_cast<SHORT>(cols), static_cast<SHORT>(rows)};
+    const COORD size{clampDim(cols), clampDim(rows)};
     HPCON hpc = nullptr;
     if (FAILED(::CreatePseudoConsole(size, inputRead.get(), outputWrite.get(), 0, &hpc))) {
         return fail("ConPTY: CreatePseudoConsole falhou");
@@ -150,7 +159,7 @@ Result<void> ConPtyBackend::resize(std::uint16_t cols, std::uint16_t rows) {
     if (closing_.load() || !pseudoConsole_.valid()) {
         return fail("ConPTY: sessao fechada");
     }
-    const COORD size{static_cast<SHORT>(cols), static_cast<SHORT>(rows)};
+    const COORD size{clampDim(cols), clampDim(rows)};
     if (FAILED(::ResizePseudoConsole(pseudoConsole_.get(), size))) {
         return fail("ConPTY: ResizePseudoConsole falhou");
     }
@@ -166,6 +175,14 @@ void ConPtyBackend::close() {
     // O reader ve closing_, drena o que sobrou na pipe e entao chama ClosePseudoConsole.
     // A jthread reader_ e unida na destruicao do backend.
     job_.reset();
+
+    // Fallback: se AssignProcessToJobObject falhou (best-effort — runner ja num job sem
+    // nesting), o job NAO mata o filho e o waiterLoop ficaria preso em
+    // WaitForSingleObject(INFINITE) -> o join do jthread no destrutor travaria a UI pra
+    // sempre. TerminateProcess garante que o processo sai (no-op se ja morreu).
+    if (process_.valid()) {
+        ::TerminateProcess(process_.get(), 1);
+    }
 }
 
 void ConPtyBackend::readerLoop() {

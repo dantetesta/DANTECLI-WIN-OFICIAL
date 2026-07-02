@@ -39,6 +39,12 @@ public:
     Q_INVOKABLE bool renamePath(const QString& path, const QString& newName) const;
     Q_INVOKABLE bool trashPath(const QString& path) const;
 
+    // F5 — abrir arquivos como abas de editor/preview.
+    Q_INVOKABLE QString fileKind(const QString& path) const; // editor|image|video|audio|other
+    Q_INVOKABLE QVariantMap readFile(const QString& path) const; // {ok, text, plain, tooBig}
+    Q_INVOKABLE bool writeFile(const QString& path, const QString& text) const; // salva UTF-8
+    Q_INVOKABLE void openExternally(const QString& path) const;  // abre no app padrão do SO
+
 signals:
     void rootChanged();
     void showHiddenChanged();

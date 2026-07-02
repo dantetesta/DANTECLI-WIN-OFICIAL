@@ -1,6 +1,7 @@
 add_library(dante_persistence STATIC
     src/Database.cpp
     src/MigrationRunner.cpp
+    src/KvStore.cpp
 )
 add_library(dante::persistence ALIAS dante_persistence)
 
@@ -18,3 +19,12 @@ target_link_libraries(dante_persistence
 )
 
 dante_target_warnings(dante_persistence)
+
+# Round-trip de persistência (migração + KvStore). Roda no mac e no CI.
+add_executable(dante_kv_test tests/test_kv.cpp)
+target_link_libraries(dante_kv_test PRIVATE dante::persistence Qt6::Core)
+target_compile_features(dante_kv_test PRIVATE cxx_std_23)
+dante_target_warnings(dante_kv_test)
+if(BUILD_TESTING)
+    add_test(NAME dante_kv_test COMMAND dante_kv_test)
+endif()

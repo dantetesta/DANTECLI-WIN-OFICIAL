@@ -17,6 +17,9 @@ public:
     Screen(int cols, int rows);
 
     void feed(std::string_view bytes) { parser_.feed(bytes); }
+    // Realoca a grade preservando o canto superior-esquerdo; faz clamp do cursor. Sem reflow
+    // (a maioria dos terminais também não reflowa sem scrollback dedicado — F2+).
+    void resize(int cols, int rows);
 
     int cols() const { return cols_; }
     int rows() const { return rows_; }
@@ -28,7 +31,7 @@ public:
     // IVtSink
     void print(char32_t cp) override;
     void execute(std::uint8_t control) override;
-    void csi(char finalByte, const std::vector<int>& params) override;
+    void csi(char priv, char finalByte, const std::vector<int>& params) override;
     void osc(const std::string& data) override;
     void esc(char finalByte) override;
 

@@ -1,21 +1,21 @@
 #pragma once
 
 #include <dante/services/IPtyBackend.hpp>
+#include <dante/terminal/Screen.hpp>
 
 #include <QObject>
 #include <QString>
 
 #include <memory>
-#include <string>
 #include <thread>
 
 namespace dante {
 
-// Liga um shell (ConPTY) a UI QML: spawna, le output num thread -> sinal (na UI thread),
-// e envia o que o usuario digita. Preview da F1/F2 — strip de ANSI simples (sem grid).
+// Liga um shell (ConPTY) a UI QML: spawna, lê o output num thread e alimenta um term::Screen
+// (grade 2D com parser VT completo), envia input tecla-a-tecla. O TerminalView (QQuickPaintedItem)
+// renderiza o Screen. F2: terminal real, não mais o preview em modo-linha.
 class TerminalController : public QObject {
     Q_OBJECT
-    Q_PROPERTY(QString output READ output NOTIFY outputChanged)
     Q_PROPERTY(bool running READ running NOTIFY runningChanged)
 
 public:
@@ -25,29 +25,32 @@ public:
     TerminalController(const TerminalController&) = delete;
     TerminalController& operator=(const TerminalController&) = delete;
 
-    Q_INVOKABLE void start();                  // spawna o shell (idempotente)
-    Q_INVOKABLE void send(const QString& text); // escreve no shell (ex.: "dir\r")
-    Q_INVOKABLE void clearOutput();            // limpa a tela do terminal
-    // pede pra UI inserir texto no campo de comando (ex.: transcrição do mic) — não envia.
+    Q_INVOKABLE void start();                             // spawna o shell (idempotente)
+    Q_INVOKABLE void send(const QString& text);           // escreve texto cru no shell (ex.: mic)
+    Q_INVOKABLE void sendKey(int key, int modifiers, const QString& text); // Qt key -> sequência VT
+    Q_INVOKABLE void resize(int cols, int rows);          // grade + PTY (chamado pela view)
+    Q_INVOKABLE void clearOutput();                       // limpa a tela (ESC[2J)
+    // pede pra UI inserir texto (transcrição do mic) — o TermView roteia p/ send() sem Enter.
     Q_INVOKABLE void requestInsert(const QString& t) { emit insertRequested(t); }
 
-    QString output() const { return output_; }
     bool running() const { return running_; }
 
+    // Acesso do TerminalView (C++, mesmo módulo). Lido só durante paint (fase de sync do Qt
+    // Quick: a GUI thread está bloqueada), e mutado só na GUI thread — sem corrida.
+    const term::Screen& screen() const { return screen_; }
+
 signals:
-    void outputChanged();
     void runningChanged();
+    void screenChanged(); // grade mudou -> a view chama update()
     void insertRequested(const QString& text);
 
 private:
     void readerLoop();
-    std::string stripAnsi(const std::string& in); // estado de parser (so reader thread)
 
     std::unique_ptr<IPtyBackend> pty_;
-    QString output_;
+    term::Screen screen_{80, 24};
     bool running_ = false;
-    int parserState_ = 0; // 0 normal, 1 esc, 2 csi, 3 osc
-    std::thread reader_;  // unido no dtor (close() gera EOF)
+    std::thread reader_; // unido no dtor (close() gera EOF)
 };
 
 } // namespace dante

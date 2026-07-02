@@ -5,6 +5,8 @@ import QtQuick.Dialogs
 import QtQml
 import Backend 1.0
 
+// (componentes EditorView/ImagePreview/MediaPlaceholder definidos abaixo, junto dos demais)
+
 ApplicationWindow {
     id: win
     visible: true
@@ -29,6 +31,11 @@ ApplicationWindow {
     property int gridRows: 1
     property int curTerm: 0
     property bool splitMode: false
+    // Canvas (F7): plano infinito. Zoom = scale (NUNCA reparent — gotcha). LOD por escala.
+    property bool canvasMode: false
+    property real canvasScale: 1.0
+    property real canvasPanX: 0
+    property real canvasPanY: 0
     property var focusedTerm: null
     property int dragTab: -1    // aba sendo arrastada (reorder na barra), -1 = nenhuma
     property int dragSlot: -1   // pane do split sendo arrastado (troca slots), -1 = nenhum
@@ -37,32 +44,32 @@ ApplicationWindow {
     property var dlgModel: null
     property int dlgIndex: -1
     property int credIndex: -1
+    property string credEditId: "" // id da credencial em edição (p/ decifrar segredos lazy)
     // menu de contexto da árvore de pastas
     property int ctxRow: -1; property string ctxPath: ""; property string ctxName: ""; property bool ctxDir: false
     property string nameMode: ""; property string nameTarget: ""   // diálogo "renomear / novo arquivo / nova pasta"
     readonly property var credTypes: ["SSH", "FTP", "SFTP", "MySQL", "API Key", "Custom"]
 
     // ===== dados =====
-    ListModel { id: favModel
-        ListElement { title: "Home"; detail: "~" }
-        ListElement { title: "Projetos"; detail: "~/Projetos" } }
-    ListModel { id: snipModel
-        ListElement { title: "git build"; detail: "git pull && npm run build" }
-        ListElement { title: "docker up"; detail: "docker compose up -d" } }
-    ListModel { id: keyModel
-        dynamicRoles: true
-        Component.onCompleted: {
-            append({ name: "Cliente A — VPS", type: "SSH", notes: "",
-                fields: [ {key:"host",value:"189.45.10.2",secret:false},{key:"port",value:"22",secret:false},{key:"user",value:"root",secret:false},{key:"password",value:"s3nh4",secret:true},{key:"key_path",value:"~/.ssh/id_rsa",secret:false} ] })
-            append({ name: "OpenAI", type: "API Key", notes: "",
-                fields: [ {key:"api_key",value:"sk-proj-xxxx",secret:true} ] })
-        } }
+    // Favoritos/Snippets são persistidos no SQLite (Store) como JSON; semeados na 1ª execução.
+    readonly property var favDefaults: [ {title:"Home",detail:"~"}, {title:"Projetos",detail:"~/Projetos"} ]
+    readonly property var snipDefaults: [ {title:"git build",detail:"git pull && npm run build"}, {title:"docker up",detail:"docker compose up -d"} ]
+    ListModel { id: favModel }
+    ListModel { id: snipModel }
+    // Credenciais: persistidas via Store; campos secretos cifrados no DPAPI (nunca em claro aqui).
+    ListModel { id: keyModel; dynamicRoles: true }
     ListModel { id: dlgFields }
-    ListModel { id: sessionsModel; Component.onCompleted: append({ tid: win.nextTid++ }) }
-    Instantiator { id: terms; model: sessionsModel; delegate: TerminalController { Component.onCompleted: start() } }
+    // Cada aba: {tid, kind, path}. kind="terminal" (ConPTY) | "editor" | "image" | "video" | "audio".
+    ListModel { id: sessionsModel; Component.onCompleted: append({ tid: win.nextTid++, kind: "terminal", path: "" }) }
+    // 1 TerminalController por aba; só as de terminal sobem ConPTY (as de arquivo ficam ociosas).
+    Instantiator { id: terms; model: sessionsModel
+        delegate: TerminalController { required property string kind; Component.onCompleted: if (kind === "terminal") start() } }
     // Split = grade fixa de slots; cada slot referencia um terminal por tid (-1 = vazio).
     ListModel { id: slotModel }
     ListModel { id: filesModel }   // árvore lazy: cada item {fname, dir, depth, open, fpath}
+    ListModel { id: tplModel }     // templates de layout salvos {name, cols, rows} (persistido)
+    // Canvas: nós livres {id,type(terminal|note),tid,text,nx,ny,nw,nh}. nx/ny/etc p/ não colidir com Item.x/y.
+    ListModel { id: canvasModel }
 
     function reloadTree() {
         filesModel.clear()
@@ -74,7 +81,7 @@ ApplicationWindow {
     function toggleRow(idx) {
         var row = filesModel.get(idx)
         win.selFile = idx
-        if (!row.dir) return
+        if (!row.dir) { win.openFileTab(row.fpath); return }
         if (row.open) {
             var n = 0
             for (var j = idx + 1; j < filesModel.count; j++) {
@@ -89,7 +96,49 @@ ApplicationWindow {
             filesModel.setProperty(idx, "open", true)
         }
     }
-    Component.onCompleted: reloadTree()
+    // ---- persistência de favoritos/snippets (Store = SQLite) ----
+    function serializeTD(lm) {
+        var a = []
+        for (var i = 0; i < lm.count; i++) { var r = lm.get(i); a.push({ title: r.title, detail: r.detail }) }
+        return JSON.stringify(a)
+    }
+    function loadTD(lm, key, defs) {
+        lm.clear()
+        var arr
+        var s = Store.load(key)
+        if (s && s.length) { try { arr = JSON.parse(s) } catch (e) { arr = defs } }
+        else arr = defs   // chave ausente = 1ª execução → semear defaults (salvar-vazio NÃO ressuscita)
+        for (var i = 0; i < arr.length; i++) lm.append({ title: arr[i].title, detail: arr[i].detail })
+    }
+    function persistList(lm) {
+        if (lm === favModel) Store.save("favorites", serializeTD(favModel))
+        else if (lm === snipModel) Store.save("snippets", serializeTD(snipModel))
+    }
+    // ---- templates de layout (split) persistidos ----
+    function serializeTpl() {
+        var a = []
+        for (var i = 0; i < tplModel.count; i++) { var t = tplModel.get(i); a.push({ name: t.name, cols: t.cols, rows: t.rows }) }
+        return JSON.stringify(a)
+    }
+    function loadTemplates() {
+        tplModel.clear()
+        var s = Store.load("layoutTemplates")
+        if (s && s.length) { try { var arr = JSON.parse(s); for (var i = 0; i < arr.length; i++) tplModel.append({ name: arr[i].name, cols: arr[i].cols, rows: arr[i].rows }) } catch (e) {} }
+    }
+    function saveTemplate(name) {
+        if (!name || name.trim().length === 0) return
+        tplModel.append({ name: name.trim(), cols: win.gridCols, rows: win.gridRows })
+        Store.save("layoutTemplates", serializeTpl())
+    }
+    function applyTemplate(i) { var t = tplModel.get(i); win.applyGrid(t.cols, t.rows); splitPopup.close() }
+    function deleteTemplate(i) { tplModel.remove(i); Store.save("layoutTemplates", serializeTpl()) }
+    Component.onCompleted: {
+        loadTD(favModel, "favorites", favDefaults)
+        loadTD(snipModel, "snippets", snipDefaults)
+        loadCreds()
+        loadTemplates()
+        reloadTree()
+    }
     Connections { target: Files
         function onRootChanged() { win.reloadTree() }
         function onShowHiddenChanged() { win.reloadTree() }
@@ -115,16 +164,78 @@ ApplicationWindow {
     function applyType(type) { credTypeSel.value = type; loadFields(defaultFields(type)) }
     function openCred(idx) {
         win.credIndex = idx
+        win.credEditId = idx >= 0 ? keyModel.get(idx).id : "" // segredos ficam em branco até revelar
         if (idx < 0) { credNameField.text = ""; credNotesField.text = ""; credTypeSel.value = "SSH"; loadFields(defaultFields("SSH")) }
-        else { var c = keyModel.get(idx); credNameField.text = c.name; credNotesField.text = c.notes; credTypeSel.value = c.type; loadFields(c.fields) }
+        else { var c = keyModel.get(idx); credNameField.text = c.name; credNotesField.text = c.notes; credTypeSel.value = c.type; loadFields(credFields(idx)) }
         credDialog.open()
+    }
+    function newCredId() { return "c" + Date.now() + Math.floor(Math.random() * 100000) }
+    // Os campos ficam numa string JSON na row (`fieldsJson`) — evita a armadilha de array
+    // aninhado no ListModel (get() não devolve JS array). Valores SECRETOS já vêm em branco
+    // (moram no DPAPI, chave "cred/<id>/<campo>"); só nomes/flags/valores não-secretos aqui.
+    function credFields(i) { try { return JSON.parse(keyModel.get(i).fieldsJson || "[]") } catch (e) { return [] } }
+    function serializeCreds() {
+        var a = []
+        for (var i = 0; i < keyModel.count; i++) {
+            var c = keyModel.get(i)
+            a.push({ id: c.id, name: c.name, type: c.type, notes: c.notes, fields: credFields(i) })
+        }
+        return JSON.stringify(a)
+    }
+    function loadCreds() {
+        keyModel.clear()
+        var s = Store.load("credentials")
+        if (s && s.length) { try { var arr = JSON.parse(s)
+            for (var i = 0; i < arr.length; i++) { var c = arr[i]
+                keyModel.append({ id: c.id, name: c.name, type: c.type, notes: c.notes || "", fieldsJson: JSON.stringify(c.fields || []) }) }
+        } catch (e) {} }
+    }
+    function persistCreds() { Store.save("credentials", serializeCreds()) }
+    function credFieldVal(fs, key) { for (var i = 0; i < fs.length; i++) if (fs[i].key === key) return fs[i].value; return "" }
+    // Conectar: monta o comando shell dos campos NÃO-secretos e injeta no terminal focado SEM
+    // Enter (o usuário revisa e dá Enter). A senha nunca entra no comando.
+    function connectCred(i) {
+        var c = keyModel.get(i), fs = credFields(i), t = c.type
+        var host = credFieldVal(fs, "host"), port = credFieldVal(fs, "port"), user = credFieldVal(fs, "user")
+        var cmd = ""
+        if (t === "SSH") { cmd = "ssh " + (user ? user + "@" : "") + host + (port && port !== "22" ? " -p " + port : ""); var kp = credFieldVal(fs, "key_path"); if (kp) cmd += " -i \"" + kp + "\"" }
+        else if (t === "SFTP") { cmd = "sftp " + (port && port !== "22" ? "-P " + port + " " : "") + (user ? user + "@" : "") + host }
+        else if (t === "FTP") { cmd = "ftp " + host + (port ? " " + port : "") }
+        else if (t === "MySQL") { var db = credFieldVal(fs, "database"); cmd = "mysql -h " + host + (port ? " -P " + port : "") + (user ? " -u " + user : "") + (db ? " " + db : "") + " -p" }
+        else return
+        if (win.focusedTerm && cmd.length) win.focusedTerm.send(cmd)
+    }
+    // Colar senha: decifra o 1º campo secreto do DPAPI (lazy) e injeta SEM Enter (prompt password:).
+    function pasteSecret(i) {
+        var c = keyModel.get(i), fs = credFields(i), key = ""
+        for (var j = 0; j < fs.length; j++) if (fs[j].secret) { key = fs[j].key; break }
+        if (!key) return
+        var v = Secrets.load("cred/" + c.id + "/" + key)
+        if (v && v.length && win.focusedTerm) win.focusedTerm.send(v)
+    }
+    function deleteCred(i) {
+        var fs = credFields(i), id = keyModel.get(i).id
+        for (var j = 0; j < fs.length; j++) if (fs[j].secret) Secrets.remove("cred/" + id + "/" + fs[j].key)
+        keyModel.remove(i)
+        persistCreds()
     }
     function saveCred() {
         if (credNameField.text.trim().length === 0) return
+        var id = (win.credIndex < 0) ? newCredId() : keyModel.get(win.credIndex).id
         var arr = []
-        for (var i = 0; i < dlgFields.count; ++i) { var f = dlgFields.get(i); arr.push({ key: f.key, value: f.value, secret: f.secret === true }) }
-        var obj = { name: credNameField.text, type: credTypeSel.value, notes: credNotesField.text, fields: arr }
-        if (win.credIndex < 0) keyModel.append(obj); else keyModel.set(win.credIndex, obj)
+        for (var i = 0; i < dlgFields.count; ++i) {
+            var f = dlgFields.get(i)
+            if (f.secret === true) {
+                // Grava no DPAPI só se o usuário digitou/revelou algo; vazio = mantém o cofre atual.
+                if (f.value && f.value.length) Secrets.store("cred/" + id + "/" + f.key, f.value)
+                arr.push({ key: f.key, value: "", secret: true })
+            } else {
+                arr.push({ key: f.key, value: f.value, secret: false })
+            }
+        }
+        var row = { id: id, name: credNameField.text, type: credTypeSel.value, notes: credNotesField.text, fieldsJson: JSON.stringify(arr) }
+        if (win.credIndex < 0) keyModel.append(row); else keyModel.set(win.credIndex, row)
+        persistCreds()
         credDialog.close()
     }
     function credIcon(type) {
@@ -136,7 +247,22 @@ ApplicationWindow {
     }
     // reorder de terminais: arrasta um pane/aba sobre outro -> move no model (ghost + DropArea)
     // ---- terminais por tid estável (abas) + slots do split ----
-    function makeTerm() { var t = win.nextTid++; sessionsModel.append({ tid: t }); return t }
+    function makeTerm() { var t = win.nextTid++; sessionsModel.append({ tid: t, kind: "terminal", path: "" }); return t }
+    // Abre um arquivo como aba de editor/preview (F5). "other" (pdf/office/zip) → app externo.
+    function openFileTab(path) {
+        var k = Files.fileKind(path)
+        if (k === "other") { Files.openExternally(path); return }
+        sessionsModel.append({ tid: win.nextTid++, kind: k, path: path })
+        win.splitMode = false
+        win.curTerm = sessionsModel.count - 1
+    }
+    function tabIcon(kind) { if (kind === "editor") return "code"; if (kind === "image" || kind === "video" || kind === "audio") return "eye"; return "terminal" }
+    function tabTitle(index) {
+        if (index < 0 || index >= sessionsModel.count) return "Terminal"
+        var r = sessionsModel.get(index)
+        return (r.kind && r.kind !== "terminal") ? Files.baseName(r.path) : "Terminal " + (index + 1)
+    }
+    readonly property string activeKind: (win.curTerm >= 0 && win.curTerm < sessionsModel.count && sessionsModel.get(win.curTerm).kind) ? sessionsModel.get(win.curTerm).kind : "terminal"
     function tabIndexForTid(tid) {
         for (var i = 0; i < sessionsModel.count; i++) if (sessionsModel.get(i).tid === tid) return i
         return -1
@@ -171,6 +297,27 @@ ApplicationWindow {
             slotModel.append({ tid: p < sessionsModel.count ? sessionsModel.get(p).tid : -1 })
         win.splitMode = true
     }
+    // ---- Canvas (F7) ----
+    function nextNodeId() { return "n" + Date.now() + Math.floor(Math.random() * 100000) }
+    function enterCanvas() {
+        if (canvasModel.count === 0) { // 1ª vez: 1 nó por terminal, numa grade
+            var k = 0
+            for (var i = 0; i < sessionsModel.count; i++) { var r = sessionsModel.get(i)
+                if (r.kind === "terminal") {
+                    canvasModel.append({ id: nextNodeId(), type: "terminal", tid: r.tid, text: "", nx: 40 + (k % 3) * 360, ny: 40 + Math.floor(k / 3) * 270, nw: 330, nh: 240 }); k++ } }
+        }
+        win.canvasMode = true
+    }
+    function addNote() {
+        canvasModel.append({ id: nextNodeId(), type: "note", tid: -1, text: "Nota — PRD vivo. Descreva a tarefa do time de agentes aqui…",
+            nx: -win.canvasPanX / win.canvasScale + 140, ny: -win.canvasPanY / win.canvasScale + 120, nw: 280, nh: 190 })
+    }
+    function addCanvasTerminal() { var t = makeTerm(); canvasModel.append({ id: nextNodeId(), type: "terminal", tid: t, text: "", nx: -win.canvasPanX / win.canvasScale + 160, ny: -win.canvasPanY / win.canvasScale + 140, nw: 330, nh: 240 }) }
+    function autoOrganize() { // grade 3 colunas pela ordem atual
+        for (var i = 0; i < canvasModel.count; i++) { canvasModel.setProperty(i, "nx", 40 + (i % 3) * 360); canvasModel.setProperty(i, "ny", 40 + Math.floor(i / 3) * 270) }
+        win.canvasScale = 1.0; win.canvasPanX = 0; win.canvasPanY = 0
+    }
+    function removeNode(i) { canvasModel.remove(i) }
     function closeSlot(s) { slotModel.setProperty(s, "tid", -1) }            // só esvazia o slot
     function fillSlot(s) { slotModel.setProperty(s, "tid", makeTerm()) }     // novo terminal no slot vazio
     function swapSlots(a, b) {
@@ -184,7 +331,7 @@ ApplicationWindow {
         if (act === "expand") win.toggleRow(win.ctxRow)
         else if (act === "terminal") win.openTerminalAt(win.ctxPath)
         else if (act === "root") Files.root = par
-        else if (act === "fav") favModel.append({ title: win.ctxName, detail: win.ctxPath })
+        else if (act === "fav") { favModel.append({ title: win.ctxName, detail: win.ctxPath }); win.persistList(favModel) }
         else if (act === "copy") Files.copyPath(win.ctxPath)
         else if (act === "reveal") Files.revealInOS(win.ctxPath)
         else if (act === "trash") { if (Files.trashPath(win.ctxPath)) win.reloadTree() }
@@ -203,6 +350,124 @@ ApplicationWindow {
     }
 
     // ===== componentes =====
+    // ===== F7: canvas (plano infinito) =====
+    component CanvasView: Item {
+        id: canvasRoot; clip: true
+        Rectangle { anchors.fill: parent; color: "#0B0B0F" }
+        // Pan: arrastar área vazia (fica ABAIXO do plano; nós capturam o drag deles).
+        MouseArea { anchors.fill: parent
+            property real px; property real py
+            onPressed: (m) => { px = m.x; py = m.y }
+            onPositionChanged: (m) => { win.canvasPanX += (m.x - px); win.canvasPanY += (m.y - py); px = m.x; py = m.y } }
+        // Zoom: roda do mouse. É SCALE (gotcha: nunca reparent).
+        WheelHandler { onWheel: (e) => { var f = e.angleDelta.y > 0 ? 1.1 : 0.9; win.canvasScale = Math.max(0.25, Math.min(2.5, win.canvasScale * f)) } }
+        // Plano pan/zoom.
+        Item { id: plane
+            x: win.canvasPanX; y: win.canvasPanY
+            transform: Scale { origin.x: 0; origin.y: 0; xScale: win.canvasScale; yScale: win.canvasScale }
+            Repeater { model: canvasModel
+                delegate: Rectangle { id: node
+                    required property int index; required property string id; required property string type
+                    required property int tid; required property string text
+                    required property real nx; required property real ny; required property real nw; required property real nh
+                    x: nx; y: ny; width: nw; height: nh; radius: 12
+                    color: type === "note" ? "#17130C" : "#0E1420"
+                    border.width: 1.5
+                    border.color: (type === "terminal" && terms.count > 0 && win.focusedTerm === win.ctrlForTid(tid)) ? cAccent : "#2A3550"
+                    // LOD: terminal só renderiza vivo com zoom suficiente; senão cartão estático.
+                    property bool live: type === "terminal" && win.canvasScale >= 0.55
+                    Rectangle { id: nhead; width: parent.width; height: 30; radius: 12
+                        color: node.type === "note" ? "#5A4A1E" : "#1E5FD0"
+                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 9; color: parent.color }
+                        Row { anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter; spacing: 6
+                            Icon { width: 13; height: 13; kind: node.type === "note" ? "star" : "terminal"; stroke: "white"; anchors.verticalCenter: parent.verticalCenter }
+                            Text { text: node.type === "note" ? "Nota" : ("Terminal " + (win.tabIndexForTid(node.tid) + 1)); color: "white"; font.pixelSize: 11; font.bold: true; anchors.verticalCenter: parent.verticalCenter } }
+                        Rectangle { anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter; width: 20; height: 20; radius: 5; color: nxm.containsMouse ? "#C23A4A" : "transparent"
+                            Icon { anchors.centerIn: parent; width: 11; height: 11; kind: "x"; stroke: "white" }
+                            MouseArea { id: nxm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.removeNode(node.index) } }
+                        // arrastar o header move o nó (delta em coords do plano p/ compensar o scale)
+                        MouseArea { anchors.fill: parent; anchors.rightMargin: 30; cursorShape: Qt.OpenHandCursor
+                            property real ppx; property real ppy
+                            onPressed: (m) => { var p = mapToItem(plane, m.x, m.y); ppx = p.x; ppy = p.y }
+                            onPositionChanged: (m) => { var p = mapToItem(plane, m.x, m.y); canvasModel.setProperty(node.index, "nx", node.nx + (p.x - ppx)); canvasModel.setProperty(node.index, "ny", node.ny + (p.y - ppy)); ppx = p.x; ppy = p.y } }
+                    }
+                    Item { anchors.top: nhead.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 6
+                        TerminalView { anchors.fill: parent; visible: node.live; controller: (node.type === "terminal" && terms.count > 0) ? win.ctrlForTid(node.tid) : null }
+                        Column { anchors.centerIn: parent; spacing: 6; visible: node.type === "terminal" && !node.live
+                            Icon { anchors.horizontalCenter: parent.horizontalCenter; width: 30; height: 30; kind: "terminal"; stroke: "#5AA0F0" }
+                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: "aproxime p/ interagir"; color: cDim; font.pixelSize: 10 } }
+                        ScrollView { anchors.fill: parent; visible: node.type === "note"; clip: true
+                            TextArea { text: node.text; onTextChanged: canvasModel.setProperty(node.index, "text", text); color: "#EAD9A8"; font.pixelSize: 12; wrapMode: TextArea.Wrap; background: Item {} } }
+                    }
+                }
+            }
+        }
+        // HUD: nível de zoom
+        Rectangle { anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 12; radius: 8; color: "#1C1C24CC"; implicitWidth: zl.implicitWidth + 20; implicitHeight: 28
+            Text { id: zl; anchors.centerIn: parent; text: Math.round(win.canvasScale * 100) + "%"; color: cDim; font.pixelSize: 12; font.bold: true } }
+    }
+
+    // ===== F5: editor / preview =====
+    component EditorView: Rectangle {
+        property string filePath; property string title: ""
+        property bool plain: false; property bool tooBig: false; property bool dirty: false
+        color: cTermBg; radius: 10; clip: true
+        function editorLang(p) {
+            var e = (p || "").split('.').pop().toLowerCase()
+            if (e === "py") return "python"
+            if (e === "sh" || e === "bash" || e === "zsh") return "shell"
+            if (e === "json") return "json"
+            return "clike"
+        }
+        function load() {
+            var r = Files.readFile(filePath)
+            tooBig = r.tooBig === true
+            if (tooBig) { ed.text = ""; return }
+            ed.text = r.ok ? r.text : ""
+            plain = r.plain === true
+            dirty = false
+        }
+        function save() { if (Files.writeFile(filePath, ed.text)) dirty = false }
+        Component.onCompleted: load()
+        onFilePathChanged: load()
+        ColumnLayout { anchors.fill: parent; spacing: 0
+            Rectangle { Layout.fillWidth: true; height: 34; color: "#14141A"
+                RowLayout { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 8; spacing: 8
+                    Icon { width: 14; height: 14; kind: "code"; stroke: "#8FB8FF" }
+                    Text { text: title + (dirty ? " •" : ""); color: cText; font.pixelSize: 12; font.bold: true }
+                    Text { visible: plain; text: "plain"; color: cDim; font.pixelSize: 10 }
+                    Item { Layout.fillWidth: true }
+                    Rectangle { implicitWidth: 78; implicitHeight: 24; radius: 6; color: svm2.containsMouse ? "#3576F5" : cAccent
+                        Text { anchors.centerIn: parent; text: "Salvar"; color: "white"; font.pixelSize: 11; font.bold: true }
+                        MouseArea { id: svm2; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: save() } } } }
+            Text { visible: tooBig; text: "Arquivo grande demais para editar (> 5 MB)."; color: cDim; font.pixelSize: 12; Layout.margins: 16 }
+            ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; visible: !tooBig; clip: true
+                TextArea { id: ed; wrapMode: TextArea.NoWrap; color: "#D6D6DA"; font.family: "Consolas"; font.pixelSize: 13
+                    leftPadding: 12; topPadding: 8; selectByMouse: true
+                    onTextChanged: dirty = true
+                    background: Rectangle { color: cTermBg }
+                    CodeHighlighter { document: ed.textDocument; language: editorLang(filePath); enabled: !plain } } }
+        }
+    }
+    component ImagePreview: Rectangle {
+        property string filePath
+        color: "#0B0B0F"; radius: 10; clip: true
+        Image { anchors.fill: parent; anchors.margins: 20; source: filePath.length ? "file://" + filePath : ""
+            fillMode: Image.PreserveAspectFit; asynchronous: true }
+    }
+    component MediaPlaceholder: Rectangle {
+        property string filePath
+        color: "#0B0B0F"; radius: 10
+        Column { anchors.centerIn: parent; spacing: 12
+            Icon { anchors.horizontalCenter: parent.horizontalCenter; width: 40; height: 40; kind: "eye"; stroke: cAccent }
+            Text { anchors.horizontalCenter: parent.horizontalCenter; text: Files.baseName(filePath); color: cText; font.pixelSize: 13 }
+            Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Player embutido em breve (QtMultimedia)."; color: cDim; font.pixelSize: 11 }
+            Rectangle { anchors.horizontalCenter: parent.horizontalCenter; implicitWidth: 150; implicitHeight: 34; radius: 8; color: opm.containsMouse ? "#3576F5" : cAccent
+                Text { anchors.centerIn: parent; text: "Abrir no app padrão"; color: "white"; font.pixelSize: 12; font.bold: true }
+                MouseArea { id: opm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: Files.openExternally(filePath) } }
+        }
+    }
+
     component Pill: Rectangle {
         property alias label: t.text; property color fg: "#B8B8C0"
         radius: 6; color: "#23232A"; implicitWidth: t.implicitWidth + 16; implicitHeight: 22
@@ -392,7 +657,7 @@ ApplicationWindow {
                         MouseArea { id: edm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.openItem(cl.lm, index, cl.title) } }
                     Rectangle { implicitWidth: 24; implicitHeight: 24; radius: 6; color: dlm.containsMouse ? "#43232A" : "transparent"
                         Icon { anchors.centerIn: parent; width: 13; height: 13; kind: "x"; stroke: dlm.containsMouse ? "#FF6A78" : cDim }
-                        MouseArea { id: dlm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: cl.lm.remove(index) } }
+                        MouseArea { id: dlm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { cl.lm.remove(index); win.persistList(cl.lm) } } }
                 }
             } }
     }
@@ -440,22 +705,14 @@ ApplicationWindow {
                         MouseArea { id: xcm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: closeReq() } }
                 }
             }
-            ScrollView { Layout.fillWidth: true; Layout.fillHeight: true; clip: true
-                TextArea { readOnly: true; wrapMode: TextArea.WrapAnywhere; text: ctrl ? ctrl.output : ""; color: "#D6D6DA"
-                    font.family: "Consolas"; font.pixelSize: 12; leftPadding: 12; topPadding: 8
-                    onTextChanged: cursorPosition = length
-                    background: Rectangle { color: cTermBg } } }
-            Rectangle { Layout.fillWidth: true; height: 36; color: "#0C0C0F"
-                RowLayout { anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 10; spacing: 6
-                    Text { text: "›"; color: "#5BD675"; font.pixelSize: 15; font.bold: true }
-                    TextField { id: cmdField; Layout.fillWidth: true; placeholderText: "comando + Enter"; color: cText; placeholderTextColor: "#5A5A64"
-                        font.family: "Consolas"; font.pixelSize: 12
-                        onActiveFocusChanged: if (activeFocus && ctrl) win.focusedTerm = ctrl
-                        onAccepted: { if (ctrl) ctrl.send(text + "\r"); text = "" }
-                        background: Rectangle { color: "transparent" }
-                        // texto transcrito do mic entra aqui (não envia: usuário revisa e dá Enter)
-                        Connections { target: ctrl
-                            function onInsertRequested(t) { cmdField.text = (cmdField.text.length ? cmdField.text + " " : "") + t; cmdField.forceActiveFocus() } } } }
+            // Terminal real (F2): grade 2D renderada do term::Screen; input tecla-a-tecla.
+            TerminalView {
+                id: termView; Layout.fillWidth: true; Layout.fillHeight: true; controller: ctrl
+                focus: true; activeFocusOnTab: true
+                onActiveFocusChanged: if (activeFocus && ctrl) win.focusedTerm = ctrl
+                // texto transcrito do mic é digitado no shell (sem Enter): o usuário revisa e dá Enter.
+                Connections { target: ctrl
+                    function onInsertRequested(t) { if (ctrl) ctrl.send(t); termView.forceActiveFocus() } }
             }
         }
     }
@@ -538,12 +795,20 @@ ApplicationWindow {
                                     ColumnLayout { spacing: 1; Layout.fillWidth: true
                                         Text { text: name; color: cText; font.pixelSize: 13; elide: Text.ElideRight; Layout.fillWidth: true }
                                         Text { text: type; color: cDim; font.pixelSize: 10 } }
+                                    Rectangle { implicitWidth: 24; implicitHeight: 24; radius: 6; color: kcm.containsMouse ? "#183A2A" : "transparent"
+                                        Icon { anchors.centerIn: parent; width: 14; height: 14; kind: "terminal"; stroke: kcm.containsMouse ? "#5BD675" : cDim }
+                                        MouseArea { id: kcm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.connectCred(index) }
+                                        ToolTip.visible: kcm.containsMouse; ToolTip.text: "Conectar no terminal focado" }
+                                    Rectangle { implicitWidth: 24; implicitHeight: 24; radius: 6; color: kpm.containsMouse ? "#2A2A36" : "transparent"
+                                        Icon { anchors.centerIn: parent; width: 14; height: 14; kind: "key"; stroke: kpm.containsMouse ? "#F0C24A" : cDim }
+                                        MouseArea { id: kpm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.pasteSecret(index) }
+                                        ToolTip.visible: kpm.containsMouse; ToolTip.text: "Colar senha no terminal (sem Enter)" }
                                     Rectangle { implicitWidth: 24; implicitHeight: 24; radius: 6; color: kedm.containsMouse ? "#2A2A36" : "transparent"
                                         Icon { anchors.centerIn: parent; width: 14; height: 14; kind: "pencil"; stroke: kedm.containsMouse ? cAccent : cDim }
                                         MouseArea { id: kedm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.openCred(index) } }
                                     Rectangle { implicitWidth: 24; implicitHeight: 24; radius: 6; color: kdlm.containsMouse ? "#43232A" : "transparent"
                                         Icon { anchors.centerIn: parent; width: 13; height: 13; kind: "x"; stroke: kdlm.containsMouse ? "#FF6A78" : cDim }
-                                        MouseArea { id: kdlm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: keyModel.remove(index) } }
+                                        MouseArea { id: kdlm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.deleteCred(index) } }
                                 } } }
                     }
                 }
@@ -580,8 +845,13 @@ ApplicationWindow {
                             enabled: Voice.state !== 2; onClicked: Voice.toggle() } }
                     TBtn { iconKind: "gear"; onClicked: settingsDlg.open() }
                     TBtn { iconKind: "trash"; label: "Limpar"; tint: "#E86A78"; onClicked: if (win.focusedTerm) win.focusedTerm.clearOutput() }
-                    TBtn { iconKind: "split"; label: "Split Layout"; onClicked: splitPopup.open() }
-                    TBtn { iconKind: "exit"; label: "Sair do Split"; tint: "#FF5A6E"; visible: win.splitMode; onClicked: win.splitMode = false }
+                    TBtn { iconKind: "split"; label: "Split Layout"; visible: !win.canvasMode; onClicked: splitPopup.open() }
+                    TBtn { iconKind: "exit"; label: "Sair do Split"; tint: "#FF5A6E"; visible: win.splitMode && !win.canvasMode; onClicked: win.splitMode = false }
+                    // Canvas (F7)
+                    TBtn { iconKind: "grip"; label: "Canvas"; tint: win.canvasMode ? cAccent : cDim; onClicked: win.canvasMode ? win.canvasMode = false : win.enterCanvas() }
+                    TBtn { iconKind: "star"; label: "Nota"; visible: win.canvasMode; onClicked: win.addNote() }
+                    TBtn { iconKind: "plus"; label: "Terminal"; visible: win.canvasMode; onClicked: win.addCanvasTerminal() }
+                    TBtn { iconKind: "reload"; label: "Organizar"; visible: win.canvasMode; onClicked: win.autoOrganize() }
                     Rectangle { implicitWidth: cbr.implicitWidth + 22; implicitHeight: 32; radius: 8
                         color: cbm.containsMouse ? "#2C2C3A" : "#23232E"; border.color: "#3A3550"; border.width: 1
                         Row { id: cbr; anchors.centerIn: parent; spacing: 6
@@ -596,8 +866,8 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 0
 
-                // --- BARRA DE ABAS (sempre, inclusive no split) ---
-                Rectangle { Layout.fillWidth: true; height: 38; color: cBg
+                // --- BARRA DE ABAS (oculta no canvas) ---
+                Rectangle { Layout.fillWidth: true; height: 38; color: cBg; visible: !win.canvasMode
                     RowLayout { anchors.fill: parent; anchors.leftMargin: 12; spacing: 6
                         Repeater { model: sessionsModel
                             delegate: Rectangle {
@@ -611,7 +881,7 @@ ApplicationWindow {
                                     onPressed: (m) => { px = m.x; moved = false }
                                     onPositionChanged: (m) => {
                                         if (!moved && sessionsModel.count > 1 && Math.abs(m.x - px) > 6) {
-                                            moved = true; win.dragTab = index; dragGhost.label = "Terminal " + (index + 1); dragGhost.Drag.active = true
+                                            moved = true; win.dragTab = index; dragGhost.label = win.tabTitle(index); dragGhost.Drag.active = true
                                         }
                                         if (moved) { var p = mapToItem(dragLayer, m.x, m.y); dragGhost.x = p.x - dragGhost.width / 2; dragGhost.y = p.y - dragGhost.height / 2 }
                                     }
@@ -619,8 +889,8 @@ ApplicationWindow {
                                 }
                                 DropArea { anchors.fill: parent; onEntered: win.reorderTab(index) }
                                 Row { id: trow; anchors.centerIn: parent; spacing: 7
-                                    Icon { width: 14; height: 14; kind: "terminal"; stroke: "#5AA0F0"; anchors.verticalCenter: parent.verticalCenter }
-                                    Text { text: "Terminal " + (index + 1); color: win.curTerm === index ? cText : cDim; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
+                                    Icon { width: 14; height: 14; kind: win.tabIcon(sessionsModel.get(index).kind); stroke: "#5AA0F0"; anchors.verticalCenter: parent.verticalCenter }
+                                    Text { text: win.tabTitle(index); color: win.curTerm === index ? cText : cDim; font.pixelSize: 13; anchors.verticalCenter: parent.verticalCenter }
                                     Rectangle { width: 18; height: 18; radius: 4; color: xma.containsMouse ? "#43232A" : "transparent"; anchors.verticalCenter: parent.verticalCenter; visible: sessionsModel.count > 1
                                         Icon { anchors.centerIn: parent; width: 11; height: 11; kind: "x"; stroke: xma.containsMouse ? "#FF6A78" : cDim }
                                         MouseArea { id: xma; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.closeTab(index) } }
@@ -635,14 +905,25 @@ ApplicationWindow {
                 Item {
                     Layout.fillWidth: true; Layout.fillHeight: true
 
-                    // --- SINGLE (sem split) ---
-                    TermView { anchors.fill: parent; anchors.margins: 10; visible: !win.splitMode
-                        ctrl: terms.objectAt(Math.min(win.curTerm, sessionsModel.count - 1))
-                        title: "Terminal " + (win.curTerm + 1) }
+                    // --- CANVAS (F7): plano infinito de nós ---
+                    CanvasView { anchors.fill: parent; visible: win.canvasMode }
+
+                    // --- SINGLE (sem split): 1 view por aba (estado preservado ao trocar) ---
+                    Item { anchors.fill: parent; anchors.margins: 10; visible: !win.splitMode && !win.canvasMode
+                        Repeater { model: sessionsModel
+                            delegate: Item {
+                                required property int index; required property string kind; required property string path
+                                anchors.fill: parent; visible: index === win.curTerm
+                                TermView { anchors.fill: parent; visible: kind === "terminal"
+                                    ctrl: terms.count > index ? terms.objectAt(index) : null; title: win.tabTitle(index) }
+                                EditorView { anchors.fill: parent; visible: kind === "editor"; filePath: path; title: win.tabTitle(index) }
+                                ImagePreview { anchors.fill: parent; visible: kind === "image"; filePath: path }
+                                MediaPlaceholder { anchors.fill: parent; visible: kind === "video" || kind === "audio"; filePath: path }
+                            } } }
 
                     // --- GRID (split): slots fixos; vazio mantém o slot ---
                     GridLayout {
-                        anchors.fill: parent; anchors.margins: 10; visible: win.splitMode
+                        anchors.fill: parent; anchors.margins: 10; visible: win.splitMode && !win.canvasMode
                         columns: win.gridCols; rowSpacing: 10; columnSpacing: 10
                         Repeater { model: slotModel
                             delegate: Item {
@@ -691,11 +972,36 @@ ApplicationWindow {
                 Column { spacing: 5; Text { text: "Linhas"; color: cDim; font.pixelSize: 11 }
                     Stepper { value: win.gridRows; minv: 1; maxv: 4; onChanged: win.gridRows = v } }
             }
-            RowLayout { Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.bottomMargin: 20; Layout.topMargin: 4
+            RowLayout { Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.topMargin: 4
                 Item { Layout.fillWidth: true }
                 Rectangle { implicitWidth: 100; implicitHeight: 38; radius: 8; color: sfm.containsMouse ? "#3576F5" : cAccent
                     Text { anchors.centerIn: parent; text: "Aplicar"; color: "white"; font.pixelSize: 13; font.bold: true }
                     MouseArea { id: sfm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { win.applyGrid(win.gridCols, win.gridRows); splitPopup.close() } } }
+            }
+
+            // Templates salvos: clicar aplica; × remove. Persistem no SQLite (Store).
+            Rectangle { Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; height: 1; color: "#2A2A34" }
+            Text { text: "Templates salvos"; color: cDim; font.pixelSize: 11; Layout.leftMargin: 22 }
+            Flow { Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; spacing: 8; visible: tplModel.count > 0
+                Repeater { model: tplModel
+                    delegate: Rectangle {
+                        required property int index; required property string name; required property int cols; required property int rows
+                        implicitWidth: tplRow.implicitWidth + 18; implicitHeight: 30; radius: 8
+                        color: tplm.containsMouse ? "#23314F" : "#1C1C24"; border.color: "#2E3850"; border.width: 1
+                        Row { id: tplRow; anchors.centerIn: parent; spacing: 6
+                            Text { text: name + "  " + cols + "×" + rows; color: cText; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter }
+                            Rectangle { width: 16; height: 16; radius: 4; color: tdm.containsMouse ? "#43232A" : "transparent"; anchors.verticalCenter: parent.verticalCenter
+                                Icon { anchors.centerIn: parent; width: 10; height: 10; kind: "x"; stroke: tdm.containsMouse ? "#FF6A78" : cDim }
+                                MouseArea { id: tdm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.deleteTemplate(index) } } }
+                        MouseArea { id: tplm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: (mouse) => { if (!tdm.containsMouse) win.applyTemplate(index) } }
+                    } } }
+            Text { text: "Nenhum template. Salve o layout atual abaixo."; color: "#5A5A64"; font.pixelSize: 11; Layout.leftMargin: 22; visible: tplModel.count === 0 }
+            RowLayout { Layout.fillWidth: true; Layout.leftMargin: 22; Layout.rightMargin: 22; Layout.bottomMargin: 20; Layout.topMargin: 2; spacing: 8
+                FField { id: tplName; Layout.fillWidth: true; placeholder: "nome do template (ex.: IDE)" }
+                Rectangle { implicitWidth: 96; implicitHeight: 38; radius: 8; color: tsm.containsMouse ? "#2A2A34" : "#23232C"
+                    Text { anchors.centerIn: parent; text: "Salvar atual"; color: cText; font.pixelSize: 12 }
+                    MouseArea { id: tsm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { win.saveTemplate(tplName.text); tplName.text = "" } } }
             }
         }
     }
@@ -967,6 +1273,7 @@ ApplicationWindow {
                         if (fTitle.text.trim().length === 0) return
                         if (win.dlgIndex < 0) win.dlgModel.append({ title: fTitle.text, detail: fDetail.text })
                         else { win.dlgModel.setProperty(win.dlgIndex, "title", fTitle.text); win.dlgModel.setProperty(win.dlgIndex, "detail", fDetail.text) }
+                        win.persistList(win.dlgModel)
                         itemDialog.close() } } }
             }
         }
@@ -1018,7 +1325,16 @@ ApplicationWindow {
                         FField { Layout.fillWidth: true; placeholder: "valor"; secret: fieldRow.secret && !fieldRow.revealed; Component.onCompleted: text = fieldRow.value; onTextChanged: dlgFields.setProperty(fieldRow.index, "value", text) }
                         Rectangle { implicitWidth: 30; implicitHeight: 30; radius: 6; color: evm.containsMouse ? "#2A2A36" : "transparent"; visible: fieldRow.secret
                             Icon { anchors.centerIn: parent; width: 15; height: 15; kind: fieldRow.revealed ? "eye" : "eyeoff"; stroke: evm.containsMouse ? cAccent : cDim }
-                            MouseArea { id: evm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: dlgFields.setProperty(fieldRow.index, "revealed", !fieldRow.revealed) } }
+                            MouseArea { id: evm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    var rev = !fieldRow.revealed
+                                    // Ao revelar um segredo vazio de uma cred existente, decifra do DPAPI (lazy).
+                                    if (rev && fieldRow.secret && (!fieldRow.value || !fieldRow.value.length) && win.credEditId.length) {
+                                        var v = Secrets.load("cred/" + win.credEditId + "/" + fieldRow.key)
+                                        if (v && v.length) dlgFields.setProperty(fieldRow.index, "value", v)
+                                    }
+                                    dlgFields.setProperty(fieldRow.index, "revealed", rev)
+                                } } }
                         Rectangle { implicitWidth: 30; implicitHeight: 30; radius: 6; color: rmm.containsMouse ? "#43232A" : "transparent"
                             Icon { anchors.centerIn: parent; width: 14; height: 14; kind: "x"; stroke: rmm.containsMouse ? "#FF6A78" : cDim }
                             MouseArea { id: rmm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: dlgFields.remove(fieldRow.index) } }

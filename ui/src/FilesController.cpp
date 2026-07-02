@@ -1,11 +1,13 @@
 #include "dante/ui/FilesController.hpp"
 
 #include <QClipboard>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QProcess>
+#include <QSet>
 #include <QStandardPaths>
 #include <QVariantMap>
 
@@ -120,6 +122,66 @@ bool FilesController::renamePath(const QString& path, const QString& newName) co
 
 bool FilesController::trashPath(const QString& path) const {
     return QFile::moveToTrash(path);
+}
+
+QString FilesController::fileKind(const QString& path) const {
+    const QString ext = QFileInfo(path).suffix().toLower();
+    static const QSet<QString> img{"png", "jpg", "jpeg", "gif", "bmp", "webp", "svg", "ico"};
+    static const QSet<QString> vid{"mp4", "mov", "mkv", "webm", "avi", "m4v"};
+    static const QSet<QString> aud{"mp3", "wav", "ogg", "flac", "m4a", "aac"};
+    // Binários/documentos: abrir no app externo (PDF/office/preview embutido = F5+).
+    static const QSet<QString> ext_ext{"pdf", "zip", "rar", "7z", "gz", "exe", "dll", "xlsx",
+                                       "docx", "pptx", "odt", "bin"};
+    if (img.contains(ext)) {
+        return "image";
+    }
+    if (vid.contains(ext)) {
+        return "video";
+    }
+    if (aud.contains(ext)) {
+        return "audio";
+    }
+    if (ext_ext.contains(ext)) {
+        return "other";
+    }
+    return "editor"; // texto/código por padrão
+}
+
+QVariantMap FilesController::readFile(const QString& path) const {
+    QVariantMap m;
+    m["ok"] = false;
+    m["text"] = QString();
+    m["plain"] = false;
+    m["tooBig"] = false;
+    const QFileInfo fi(path);
+    if (!fi.exists() || !fi.isFile()) {
+        return m;
+    }
+    if (fi.size() > 5 * 1024 * 1024) { // >5MB: não carrega no editor
+        m["tooBig"] = true;
+        return m;
+    }
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) {
+        return m;
+    }
+    m["text"] = QString::fromUtf8(f.readAll());
+    m["plain"] = fi.size() > 500 * 1024; // plain-mode: sem realce em arquivos grandes (PRD H)
+    m["ok"] = true;
+    return m;
+}
+
+bool FilesController::writeFile(const QString& path, const QString& text) const {
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+    const QByteArray data = text.toUtf8();
+    return f.write(data) == data.size();
+}
+
+void FilesController::openExternally(const QString& path) const {
+    QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 QString FilesController::displayPath(const QString& path) const {
