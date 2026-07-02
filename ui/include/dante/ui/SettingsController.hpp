@@ -29,7 +29,7 @@ public:
     }
     void setGroqApiKey(const QString& v) {
         if (groqApiKey() != v) {
-            secrets_.store(kGroqKeySecret, v.toStdString());
+            (void)secrets_.store(kGroqKeySecret, v.toStdString()); // best-effort; Result é [[nodiscard]]
             emit changed();
         }
     }

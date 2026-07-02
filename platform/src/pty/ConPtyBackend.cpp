@@ -13,9 +13,11 @@ namespace {
 // um valor > 32767 vira negativo no cast e o conhost recebe dimensao invalida.
 SHORT clampDim(std::uint16_t v) {
     if (v < 1) {
-        return 1;
+        v = 1;
+    } else if (v > 9999) {
+        v = 9999;
     }
-    return v > 9999 ? 9999 : static_cast<SHORT>(v);
+    return static_cast<SHORT>(v); // cast único e explícito — evita narrowing int->SHORT (C4244) no MSVC
 }
 
 std::wstring utf8ToWide(const std::string& s) {

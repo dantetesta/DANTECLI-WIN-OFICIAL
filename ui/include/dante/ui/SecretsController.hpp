@@ -22,7 +22,7 @@ public:
         auto r = secrets_.load(key.toStdString());
         return r ? QString::fromStdString(*r) : QString();
     }
-    Q_INVOKABLE void remove(const QString& key) { secrets_.store(key.toStdString(), std::string{}); }
+    Q_INVOKABLE void remove(const QString& key) { (void)secrets_.store(key.toStdString(), std::string{}); }
 
 private:
     DpapiSecrets secrets_;

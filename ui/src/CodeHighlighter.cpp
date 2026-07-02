@@ -90,7 +90,7 @@ protected:
         setCurrentBlockState(0);
         static const QRegularExpression startRe("/\\*");
         static const QRegularExpression endRe("\\*/");
-        int start = (previousBlockState() == 1) ? 0 : text.indexOf(startRe);
+        int start = (previousBlockState() == 1) ? 0 : static_cast<int>(text.indexOf(startRe));
         while (start >= 0) {
             const auto end = endRe.match(text, start);
             int len = 0;
