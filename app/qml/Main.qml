@@ -392,7 +392,8 @@ ApplicationWindow {
                             onPositionChanged: (m) => { var p = mapToItem(plane, m.x, m.y); canvasModel.setProperty(node.index, "nx", node.nx + (p.x - ppx)); canvasModel.setProperty(node.index, "ny", node.ny + (p.y - ppy)); ppx = p.x; ppy = p.y } }
                     }
                     Item { anchors.top: nhead.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 6
-                        TerminalView { anchors.fill: parent; visible: node.live; controller: (node.type === "terminal" && terms.count > 0) ? win.ctrlForTid(node.tid) : null }
+                        TerminalView { anchors.fill: parent; visible: node.live; controller: (node.type === "terminal" && terms.count > 0) ? win.ctrlForTid(node.tid) : null
+                            onFocused: if (node.type === "terminal") win.focusedTerm = win.ctrlForTid(node.tid) }
                         Column { anchors.centerIn: parent; spacing: 6; visible: node.type === "terminal" && !node.live
                             Icon { anchors.horizontalCenter: parent.horizontalCenter; width: 30; height: 30; kind: "terminal"; stroke: "#5AA0F0" }
                             Text { anchors.horizontalCenter: parent.horizontalCenter; text: "aproxime p/ interagir"; color: cDim; font.pixelSize: 10 } }
@@ -708,8 +709,8 @@ ApplicationWindow {
             // Terminal real (F2): grade 2D renderada do term::Screen; input tecla-a-tecla.
             TerminalView {
                 id: termView; Layout.fillWidth: true; Layout.fillHeight: true; controller: ctrl
-                focus: true; activeFocusOnTab: true
-                onActiveFocusChanged: if (activeFocus && ctrl) win.focusedTerm = ctrl
+                focus: true
+                onFocused: if (ctrl) win.focusedTerm = ctrl
                 // texto transcrito do mic é digitado no shell (sem Enter): o usuário revisa e dá Enter.
                 Connections { target: ctrl
                     function onInsertRequested(t) { if (ctrl) ctrl.send(t); termView.forceActiveFocus() } }

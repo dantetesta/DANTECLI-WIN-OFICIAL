@@ -28,6 +28,9 @@ public:
 
 signals:
     void controllerChanged();
+    void focused(); // clique deu foco — QML usa p/ marcar o terminal ativo (sinal custom:
+                    // o qmlcachegen do Release/MSVC resolve custom, mas NÃO membros herdados
+                    // do QQuickItem em tipo registrado por qmlRegisterType — ex.: activeFocusOnTab)
 
 protected:
     void geometryChange(const QRectF& newGeom, const QRectF& oldGeom) override;

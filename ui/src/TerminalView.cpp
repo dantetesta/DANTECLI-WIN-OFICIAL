@@ -146,6 +146,7 @@ void TerminalView::keyPressEvent(QKeyEvent* e) {
 
 void TerminalView::mousePressEvent(QMouseEvent* e) {
     forceActiveFocus();
+    emit focused();
     update(); // redesenha o cursor (foco mudou)
     e->accept();
 }
